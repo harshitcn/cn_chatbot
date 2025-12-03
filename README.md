@@ -169,14 +169,32 @@ FastAPI provides interactive API documentation:
 
 ### Build Docker Image
 
+**Using the build script (recommended for production):**
 ```bash
-docker build -t chatbot-faq .
+# Make the script executable (Linux/Mac)
+chmod +x build-prod.sh
+
+# Run the build script
+./build-prod.sh
+```
+
+**Or build manually:**
+```bash
+# Production build
+docker build --build-arg APP_ENV=production -t cn-chatbot:production .
+
+# Stage build (default)
+docker build -t cn-chatbot:stage .
 ```
 
 ### Run Docker Container
 
 ```bash
-docker run -p 8000:8000 chatbot-faq
+# Run production container
+docker run -p 8000:8000 -e APP_ENV=production cn-chatbot:production
+
+# Or run stage container
+docker run -p 8000:8000 cn-chatbot:stage
 ```
 
 The API will be available at `http://localhost:8000`
