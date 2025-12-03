@@ -27,6 +27,9 @@ async def get_faq_answer(request: FAQRequest) -> FAQResponse:
     """
     try:
         logger.info(f"Processing FAQ request: {request.question[:50]}...")
+        
+        # Lazy load retriever on first request (saves memory on startup)
+        logger.info("Loading retriever (first request may take 30-60 seconds to download models)...")
         retriever = get_retriever()
         
         # Check if retriever is initialized

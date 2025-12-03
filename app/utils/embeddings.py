@@ -37,14 +37,26 @@ def get_faiss_index_path() -> Path:
 def get_embeddings() -> HuggingFaceEmbeddings:
     """
     Initialize and return HuggingFace embeddings model.
+    Optimized for memory usage on free tier platforms.
     
     Returns:
         HuggingFaceEmbeddings: Initialized embeddings model
     """
+    import os
+    # Set environment variables to reduce memory usage
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
-        model_kwargs={"device": "cpu"},  # Use CPU for free tier compatibility
-        encode_kwargs={"normalize_embeddings": True}
+        model_kwargs={
+            "device": "cpu",  # Use CPU for free tier compatibility
+            "trust_remote_code": False
+        },
+        encode_kwargs={
+            "normalize_embeddings": True,
+            "batch_size": 1,  # Process one at a time to save memory
+            "show_progress_bar": False
+        }
     )
 
 

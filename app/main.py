@@ -26,27 +26,25 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Lifespan context manager for startup and shutdown events.
-    Pre-initializes the retriever to load models and FAISS index at startup.
+    Note: Retriever is loaded lazily on first request to save memory on free tier.
     """
-    # Startup: Pre-initialize retriever
+    # Startup: Just log, don't load models to save memory
     logger.info("🚀 Starting up application...")
     logger.info(f"Environment: {settings.app_env.upper()}")
     logger.info(f"Vector store path: {settings.vector_store_path}")
-    
-    try:
-        logger.info("📦 Loading FAQ retriever and models (this may take a minute)...")
-        # Pre-initialize the retriever to load models and FAISS index
-        retriever = get_retriever()
-        logger.info("✅ FAQ retriever initialized successfully!")
-        logger.info("✅ Application ready to serve requests")
-    except Exception as e:
-        logger.error(f"❌ Error initializing retriever: {str(e)}", exc_info=True)
-        logger.warning("⚠️ Application will continue but FAQ endpoint may fail")
+    logger.info("📝 Retriever will be loaded lazily on first request to optimize memory usage")
+    logger.info("✅ Application ready to serve requests")
     
     yield
     
-    # Shutdown
+    # Shutdown: Clean up if retriever was loaded
     logger.info("🛑 Shutting down application...")
+    try:
+        from app.chains import _retriever
+        if _retriever is not None:
+            logger.info("Cleaning up retriever...")
+    except:
+        pass
 
 
 # Initialize FastAPI application
