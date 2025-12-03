@@ -8,7 +8,6 @@ A FAQ chatbot built with FastAPI, LangChain, HuggingFace embeddings, and FAISS v
 - 🤖 LangChain integration for semantic search
 - 📊 FAISS vector store for efficient similarity search
 - 🎯 HuggingFace sentence-transformers (`all-MiniLM-L6-v2`) for embeddings
-- 🐳 Docker containerization
 - 
 ## Project Structure
 
@@ -25,7 +24,6 @@ chatbot-faq/
 │   └── utils/
 │       └── embeddings.py   # Embeddings and FAISS utilities
 ├── requirements.txt         # Python dependencies
-├── Dockerfile              # Docker configuration
 ├── render.yaml             # Render deployment configuration
 ├── .env.stage              # Stage environment configuration
 ├── .env.production         # Production environment configuration
@@ -36,7 +34,6 @@ chatbot-faq/
 
 - Python 3.11 or higher
 - pip (Python package manager)
-- Docker (optional, for containerized deployment)
 
 ## Local Setup
 
@@ -165,36 +162,31 @@ FastAPI provides interactive API documentation:
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
-## Docker Deployment
+## Running the Application
 
-### Build Docker Image
+### Production Mode
 
-**Using the build script (recommended for production):**
 ```bash
-# Make the script executable (Linux/Mac)
-chmod +x build-prod.sh
+# Set environment to production
+export APP_ENV=production  # Linux/Mac
+# or
+set APP_ENV=production    # Windows CMD
+# or
+$env:APP_ENV="production" # Windows PowerShell
 
-# Run the build script
-./build-prod.sh
+# Run the application
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-**Or build manually:**
-```bash
-# Production build
-docker build --build-arg APP_ENV=production -t cn-chatbot:production .
-
-# Stage build (default)
-docker build -t cn-chatbot:stage .
-```
-
-### Run Docker Container
+### Stage Mode (Default)
 
 ```bash
-# Run production container
-docker run -p 8000:8000 -e APP_ENV=production cn-chatbot:production
+# Stage is the default, so you can just run:
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# Or run stage container
-docker run -p 8000:8000 cn-chatbot:stage
+# Or explicitly set it:
+export APP_ENV=stage  # Linux/Mac
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at `http://localhost:8000`
@@ -240,9 +232,9 @@ The API will be available at `http://localhost:8000`
 
 2. **Configure the Service:**
    - **Name:** `cn-chatbot` (or your preferred name)
-   - **Runtime:** Docker
-   - **Dockerfile Path:** `./Dockerfile`
-   - **Docker Context:** `.`
+   - **Runtime:** Python 3
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
    - **Plan:** Free
 
 3. **Set Environment Variables:**

@@ -552,7 +552,7 @@ The architecture is designed to be:
 - **Cost-effective**: No paid API keys required
 - **Scalable**: Can be extended with databases, caching, etc.
 - **Maintainable**: Clean code structure, type hints, documentation
-- **Deployable**: Docker support, environment-based configuration
+- **Deployable**: Python runtime, environment-based configuration
 
 All libraries were chosen for their balance of features, performance, cost, and ease of use, making this an ideal solution for a free-tier deployable chatbot.
 
