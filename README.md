@@ -9,7 +9,6 @@ A FAQ chatbot built with FastAPI, LangChain, HuggingFace embeddings, and FAISS v
 - 📊 FAISS vector store for efficient similarity search
 - 🎯 HuggingFace sentence-transformers (`all-MiniLM-L6-v2`) for embeddings
 - 🐳 Docker containerization
-- ☁️ CI/CD pipeline for Azure App Service deployment
 - 
 ## Project Structure
 
@@ -27,12 +26,10 @@ chatbot-faq/
 │       └── embeddings.py   # Embeddings and FAISS utilities
 ├── requirements.txt         # Python dependencies
 ├── Dockerfile              # Docker configuration
+├── render.yaml             # Render deployment configuration
 ├── .env.stage              # Stage environment configuration
 ├── .env.production         # Production environment configuration
-├── README.md               # This file
-└── .github/
-    └── workflows/
-        └── azure-webapp.yml # GitHub Actions CI/CD pipeline
+└── README.md               # This file
 ```
 
 ## Prerequisites
@@ -40,7 +37,6 @@ chatbot-faq/
 - Python 3.11 or higher
 - pip (Python package manager)
 - Docker (optional, for containerized deployment)
-- Azure account (for deployment to App Service)
 
 ## Local Setup
 
@@ -269,134 +265,7 @@ Render will automatically check the `/health` endpoint. Make sure it's accessibl
 curl https://your-service-name.onrender.com/health
 ```
 
-## Azure App Service Deployment (Free Tier)
-
-### Prerequisites
-
-1. Azure account (free tier available)
-2. Azure CLI installed
-3. GitHub repository with code
-
-### Manual Deployment Steps
-
-#### 1. Create Azure App Service
-
-```bash
-# Login to Azure
-az login
-
-# Create resource group
-az group create --name chatbot-faq-rg --location eastus
-
-# Create App Service Plan (Free tier)
-az appservice plan create \
-  --name chatbot-faq-plan \
-  --resource-group chatbot-faq-rg \
-  --sku FREE \
-  --is-linux
-
-# Create Web App
-az webapp create \
-  --name chatbot-faq-app \
-  --resource-group chatbot-faq-rg \
-  --plan chatbot-faq-plan \
-  --deployment-container-image-name chatbot-faq:latest
-```
-
-#### 2. Configure Web App
-
-```bash
-# Set port (App Service uses PORT environment variable)
-az webapp config appsettings set \
-  --name chatbot-faq-app \
-  --resource-group chatbot-faq-rg \
-  --settings PORT=8000
-```
-
-#### 3. Deploy Using Docker
-
-```bash
-# Get publish profile
-az webapp deployment list-publishing-profiles \
-  --name chatbot-faq-app \
-  --resource-group chatbot-faq-rg \
-  --xml
-```
-
-### Automated CI/CD Deployment
-
-The project includes a GitHub Actions workflow for automated deployment to Azure App Service.
-
-#### Setup GitHub Actions
-
-1. **Create Azure App Services for Stage and Production:**
-   ```bash
-   # Stage environment
-   az webapp create \
-     --name chatbot-faq-stage \
-     --resource-group chatbot-faq-rg \
-     --plan chatbot-faq-plan
-   
-   # Production environment
-   az webapp create \
-     --name chatbot-faq-prod \
-     --resource-group chatbot-faq-rg \
-     --plan chatbot-faq-plan
-   ```
-
-2. **Get Publish Profiles:**
-   - Go to Azure Portal → Your App Service → Get publish profile
-   - Download the `.PublishSettings` file for each environment
-
-3. **Add GitHub Secrets:**
-   - Go to your GitHub repository → Settings → Secrets and variables → Actions
-   - Click "New repository secret" and add the following:
-   
-   **Required Secrets:**
-   - `AZURE_WEBAPP_NAME_stage` - Value: `chatbot-faq-stage`
-   - `AZURE_WEBAPP_NAME_production` - Value: `chatbot-faq-prod`
-   - `AZURE_WEBAPP_PUBLISH_PROFILE_stage` - Copy entire content of stage `.PublishSettings` file
-   - `AZURE_WEBAPP_PUBLISH_PROFILE_production` - Copy entire content of production `.PublishSettings` file
-   
-   **Optional (if using Docker Hub):**
-   - `DOCKER_USERNAME` - Your Docker Hub username
-   - `DOCKER_PASSWORD` - Your Docker Hub password
-
-4. **Configure App Service Settings:**
-   - Go to each App Service → Configuration → Application settings
-   - Add: `APP_ENV` = `stage` (for stage) or `production` (for production)
-
-5. **Push to main branch:**
-   ```bash
-   git add .
-   git commit -m "Initial commit"
-   git push origin main
-   ```
-
-The workflow will automatically:
-- Build Docker images for both stage and production environments
-- Deploy to respective Azure App Services using matrix strategy
-- Set APP_ENV appropriately for each environment
-
-#### Workflow Configuration
-
-The workflow file (`.github/workflows/azure-webapp.yml`) is configured to:
-- Trigger on push to `main` branch or manual workflow dispatch
-- Use matrix strategy to deploy to both stage and production simultaneously
-- Build Docker image with `APP_ENV` build argument
-- Deploy to Azure App Service using publish profile
-
-**Manual Deployment:**
-You can also trigger deployments manually via GitHub Actions UI:
-- Go to Actions → Deploy to Azure App Service → Run workflow
-- Choose to deploy to "all", "stage", or "production"
-
-**Note:** For the free tier, you may need to:
-- Use Azure Container Registry (free tier) or Docker Hub
-- Configure the app to pull from the registry
-- Set appropriate environment variables in Azure Portal
-
-### Environment Variables
+## Environment Variables
 
 The application supports two environments: **stage** and **production**. Configuration is managed through environment files and environment variables.
 
@@ -411,15 +280,6 @@ The application supports two environments: **stage** and **production**. Configu
 - `DATABASE_URL` - Database connection string (dummy values for now)
 - `VECTOR_STORE_PATH` - Path to FAISS vector store index
 - `PORT` - Server port (default: 8000)
-
-**Azure App Service Settings:**
-
-Configure these in Azure App Service Settings for each environment:
-
-- `APP_ENV` - Set to "stage" or "production"
-- `PORT=8000` (if not using default)
-- `PYTHONUNBUFFERED=1` (recommended)
-- `VECTOR_STORE_PATH` - Override vector store path if needed
 
 **Example:**
 ```bash

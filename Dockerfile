@@ -31,10 +31,10 @@ COPY app/ ./app/
 # Create cache and data directories for FAISS index
 RUN mkdir -p .cache data
 
-# Expose port 8000 (Azure App Service may use PORT env var)
+# Expose port 8000
 EXPOSE 8000
 
 # Run uvicorn server
-# Use PORT environment variable if set (for Azure App Service), otherwise use 8000
+# Use PORT environment variable if set (for cloud platforms like Render), otherwise use 8000
 CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 
