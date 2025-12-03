@@ -3,11 +3,13 @@ FastAPI application main entry point.
 Initializes the FastAPI app with routes and middleware.
 """
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import WelcomeResponse
 from app.routes import faq
 from app.config import get_settings
+from app.chains import get_retriever
 
 # Get settings based on environment
 settings = get_settings()
@@ -19,12 +21,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup and shutdown events.
+    Pre-initializes the retriever to load models and FAISS index at startup.
+    """
+    # Startup: Pre-initialize retriever
+    logger.info("🚀 Starting up application...")
+    logger.info(f"Environment: {settings.app_env.upper()}")
+    logger.info(f"Vector store path: {settings.vector_store_path}")
+    
+    try:
+        logger.info("📦 Loading FAQ retriever and models (this may take a minute)...")
+        # Pre-initialize the retriever to load models and FAISS index
+        retriever = get_retriever()
+        logger.info("✅ FAQ retriever initialized successfully!")
+        logger.info("✅ Application ready to serve requests")
+    except Exception as e:
+        logger.error(f"❌ Error initializing retriever: {str(e)}", exc_info=True)
+        logger.warning("⚠️ Application will continue but FAQ endpoint may fail")
+    
+    yield
+    
+    # Shutdown
+    logger.info("🛑 Shutting down application...")
+
+
 # Initialize FastAPI application
 app = FastAPI(
     title=settings.app_name,
     description="Codeninjas FAQ chatbot using LangChain with HuggingFace embeddings and FAISS",
     version="1.0.0",
-    debug=settings.debug
+    debug=settings.debug,
+    lifespan=lifespan
 )
 
 # Log environment information
@@ -62,10 +93,26 @@ async def root() -> WelcomeResponse:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring."""
-    return {
-        "status": "healthy",
-        "environment": settings.app_env,
-        "debug": settings.debug
-    }
+    """
+    Health check endpoint for monitoring.
+    Checks if the retriever is initialized.
+    """
+    try:
+        from app.chains import get_retriever
+        retriever = get_retriever()
+        retriever_ready = retriever.vector_store is not None
+        
+        return {
+            "status": "healthy" if retriever_ready else "initializing",
+            "environment": settings.app_env,
+            "debug": settings.debug,
+            "retriever_ready": retriever_ready
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {str(e)}")
+        return {
+            "status": "unhealthy",
+            "environment": settings.app_env,
+            "error": str(e)
+        }
 
