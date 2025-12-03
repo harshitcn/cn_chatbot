@@ -545,4 +545,3 @@ For issues and questions:
 - [LangChain](https://www.langchain.com/) - LLM application framework
 - [HuggingFace](https://huggingface.co/) - Transformers and embeddings
 - [FAISS](https://github.com/facebookresearch/faiss) - Efficient similarity search
-
