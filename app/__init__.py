@@ -1,0 +1,2 @@
+"""Chatbot FAQ application package."""
+
