@@ -93,24 +93,12 @@ async def root() -> WelcomeResponse:
 async def health_check():
     """
     Health check endpoint for monitoring.
-    Checks if the retriever is initialized.
+    Does NOT load the retriever to avoid memory issues on Render free tier.
     """
-    try:
-        from app.chains import get_retriever
-        retriever = get_retriever()
-        retriever_ready = retriever.vector_store is not None
-        
-        return {
-            "status": "healthy" if retriever_ready else "initializing",
-            "environment": settings.app_env,
-            "debug": settings.debug,
-            "retriever_ready": retriever_ready
-        }
-    except Exception as e:
-        logger.error(f"Health check error: {str(e)}")
-        return {
-            "status": "unhealthy",
-            "environment": settings.app_env,
-            "error": str(e)
-        }
+    return {
+        "status": "healthy",
+        "environment": settings.app_env,
+        "debug": settings.debug,
+        "message": "Service is running. FAQ endpoint will load models on first request."
+    }
 

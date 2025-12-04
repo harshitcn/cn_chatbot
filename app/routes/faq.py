@@ -40,6 +40,13 @@ async def get_faq_answer(request: FAQRequest) -> FAQResponse:
         answer = await retriever.get_answer(request.question)
         logger.info("FAQ request processed successfully")
         return FAQResponse(answer=answer)
+        
+    except MemoryError as e:
+        logger.error(f"Out of memory error: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable due to memory constraints. Please try again in a moment or contact support."
+        )
     except Exception as e:
         logger.error(f"Error processing FAQ request: {str(e)}", exc_info=True)
         raise HTTPException(
