@@ -20,6 +20,12 @@ services:
         value: "false"
       - key: PYTORCH_CUDA_ALLOC_CONF
         value: "max_split_size_mb:128"
+      - key: HF_HUB_DISABLE_EXPERIMENTAL_WARNING
+        value: "1"
+      - key: TRANSFORMERS_NO_ADVISORY_WARNINGS
+        value: "1"
+      - key: PYTORCH_ENABLE_MPS_FALLBACK
+        value: "1"
     healthCheckPath: /health
     autoDeploy: true
 

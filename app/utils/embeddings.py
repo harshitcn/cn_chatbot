@@ -14,7 +14,9 @@ from langchain_core.documents import Document
 from app.config import get_settings
 
 # Model name for sentence transformers
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# Using the smallest viable model for 512MB memory limit
+# paraphrase-MiniLM-L3-v2 is ~60MB vs all-MiniLM-L6-v2 which is ~80MB
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-MiniLM-L3-v2"
 
 
 def get_faiss_index_path() -> Path:
@@ -37,25 +39,34 @@ def get_faiss_index_path() -> Path:
 def get_embeddings() -> HuggingFaceEmbeddings:
     """
     Initialize and return HuggingFace embeddings model.
-    Optimized for memory usage on free tier platforms.
+    Optimized for memory usage on free tier platforms (512MB limit).
     
     Returns:
         HuggingFaceEmbeddings: Initialized embeddings model
     """
     import os
+    import gc
+    
     # Set environment variables to reduce memory usage
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
+    os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+    
+    # Force garbage collection before loading model
+    gc.collect()
     
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         model_kwargs={
             "device": "cpu",  # Use CPU for free tier compatibility
-            "trust_remote_code": False
+            "trust_remote_code": False,
+            "low_cpu_mem_usage": True,  # Optimize memory usage
         },
         encode_kwargs={
             "normalize_embeddings": True,
             "batch_size": 1,  # Process one at a time to save memory
-            "show_progress_bar": False
+            "show_progress_bar": False,
+            "convert_to_numpy": True,  # Use numpy instead of torch tensors
         }
     )
 
@@ -80,6 +91,7 @@ def _compute_faq_hash(faq_data: List[dict]) -> str:
 def build_faiss_index(faq_data: List[dict], embeddings: Optional[HuggingFaceEmbeddings] = None) -> FAISS:
     """
     Build FAISS vector store from FAQ data.
+    Optimized for memory usage on free tier platforms.
     
     Args:
         faq_data: List of dictionaries with 'question' and 'answer' keys
@@ -88,21 +100,23 @@ def build_faiss_index(faq_data: List[dict], embeddings: Optional[HuggingFaceEmbe
     Returns:
         FAISS: Vector store containing FAQ documents
     """
+    import gc
+    
     if embeddings is None:
         embeddings = get_embeddings()
     
-    # Create Document objects from FAQ data
+    # Create Document objects from FAQ data (minimize memory)
     documents = []
     for idx, faq in enumerate(faq_data):
-        # Store both question and answer in the document text
-        # Metadata contains the answer for retrieval
+        # Store only question in page_content, answer in metadata to save memory
         doc = Document(
             page_content=faq["question"],
-            metadata={"answer": faq["answer"], "question": faq["question"], "index": idx}
+            metadata={"answer": faq["answer"], "index": idx}  # Removed duplicate question
         )
         documents.append(doc)
     
     # Build FAISS vector store
+    # For memory optimization, build directly (FAISS is already memory efficient)
     vector_store = FAISS.from_documents(documents, embeddings)
     
     # Save to disk for future use
@@ -113,6 +127,9 @@ def build_faiss_index(faq_data: List[dict], embeddings: Optional[HuggingFaceEmbe
     current_hash = _compute_faq_hash(faq_data)
     hash_file = faiss_index_path / "faq_hash.txt"
     hash_file.write_text(current_hash)
+    
+    # Force garbage collection after building
+    gc.collect()
     
     return vector_store
 

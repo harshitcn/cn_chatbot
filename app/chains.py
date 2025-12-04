@@ -34,8 +34,25 @@ class FAQRetriever:
         self._initialize_vector_store()
     
     def _initialize_vector_store(self):
-        """Initialize the FAISS vector store with FAQ data."""
-        self.vector_store = load_or_build_faiss_index(FAQ_DATA)
+        """Initialize the FAISS vector store with FAQ data.
+        Optimized for memory usage on free tier platforms.
+        """
+        import gc
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            logger.info("Initializing vector store (this may take a moment)...")
+            self.vector_store = load_or_build_faiss_index(FAQ_DATA)
+            # Force garbage collection after initialization
+            gc.collect()
+            logger.info("Vector store initialized successfully")
+        except MemoryError as e:
+            logger.error(f"Out of memory during vector store initialization: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error initializing vector store: {e}")
+            raise
     
     def _convert_location_data_to_faq(self, location_data: Dict[str, Any], location_name: str) -> List[Dict[str, str]]:
         """
@@ -145,6 +162,7 @@ class FAQRetriever:
     def _merge_location_data_with_faq(self, location_faq_data: List[Dict[str, str]]) -> FAISS:
         """
         Merge location-based FAQ data with static FAQ data and create a vector store.
+        Optimized for memory usage.
         
         Args:
             location_faq_data: Location-based FAQ data
@@ -152,22 +170,29 @@ class FAQRetriever:
         Returns:
             FAISS: Combined vector store
         """
+        import gc
+        
         # Combine static and location data
         combined_data = FAQ_DATA + location_faq_data
         
-        # Create documents
+        # Create documents (minimize memory)
         embeddings = get_embeddings()
         documents = []
         for idx, faq in enumerate(combined_data):
             doc = Document(
                 page_content=faq["question"],
-                metadata={"answer": faq["answer"], "question": faq["question"], "index": idx}
+                metadata={"answer": faq["answer"], "index": idx}  # Removed duplicate question
             )
             documents.append(doc)
         
         # Create vector store from combined data
         # We'll create a temporary in-memory store for this query
         vector_store = FAISS.from_documents(documents, embeddings)
+        
+        # Clean up
+        del documents
+        gc.collect()
+        
         return vector_store
     
     async def get_answer(self, question: str) -> str:
