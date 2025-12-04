@@ -14,9 +14,7 @@ from langchain_core.documents import Document
 from app.config import get_settings
 
 # Model name for sentence transformers
-# Using the smallest viable model for 512MB memory limit
-# paraphrase-MiniLM-L3-v2 is ~60MB vs all-MiniLM-L6-v2 which is ~80MB
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-MiniLM-L3-v2"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 def get_faiss_index_path() -> Path:
