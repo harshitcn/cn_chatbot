@@ -59,8 +59,7 @@ def get_embeddings() -> HuggingFaceEmbeddings:
         model_name=EMBEDDING_MODEL,
         model_kwargs={
             "device": "cpu",  # Use CPU for free tier compatibility
-            "trust_remote_code": False,
-            "low_cpu_mem_usage": True,  # Optimize memory usage
+            "trust_remote_code": False
         },
         encode_kwargs={
             "normalize_embeddings": True,
