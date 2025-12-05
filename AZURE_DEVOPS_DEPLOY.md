@@ -38,7 +38,11 @@ Complete guide to deploy your chatbot from Azure DevOps repository to Azure App 
 ### Step 3: Configure Application Settings
 
 1. Go to **Configuration** → **Application settings**
-2. Add these settings:
+2. **IMPORTANT:** Add this setting first to enable dependency installation:
+   - Name: `SCM_DO_BUILD_DURING_DEPLOYMENT`
+   - Value: `true`
+   - This ensures Azure installs dependencies from `requirements.txt`
+3. Add these additional settings:
 
    | Name | Value |
    |------|-------|
@@ -165,12 +169,19 @@ Agentic AI/
 │   ├── config.py
 │   ├── faq_data.py
 │   └── ...
+├── .deployment          ← Azure deployment config (enables build)
+├── build.sh             ← Build script (optional)
 ├── azure-pipelines.yml  ← Pipeline configuration
 ├── startup.sh           ← Azure startup script
 ├── runtime.txt          ← Python version
 ├── requirements.txt     ← Python dependencies
 └── README.md
 ```
+
+**Important Files:**
+- `.deployment` - Tells Azure to build and install dependencies
+- `requirements.txt` - Must be in root directory
+- `startup.sh` - Startup script (or use direct command)
 
 ## Continuous Deployment
 
@@ -219,6 +230,8 @@ Your app is already optimized:
 - Azure Portal → Web App → **Log stream**
 - Verify Python version matches `runtime.txt`
 - Check for errors in application logs
+- **If "No module named uvicorn"**: Ensure `SCM_DO_BUILD_DURING_DEPLOYMENT=true` is set
+- Verify `.deployment` file exists in repository root
 
 ### Out of Memory
 
