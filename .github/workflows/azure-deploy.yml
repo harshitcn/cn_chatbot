@@ -8,6 +8,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: cn-chatbot-app-avgchjh7bhckhycn  # Update with your actual Azure App Service name
+  AZURE_RESOURCE_GROUP: cn-chatbot-rg  # Update with your resource group name
   PYTHON_VERSION: '3.11'
 
 jobs:
@@ -23,12 +24,16 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
     - name: Deploy to Azure Web App
       id: deploy-to-webapp
       uses: azure/webapps-deploy@v3
       with:
         app-name: ${{ env.AZURE_WEBAPP_NAME }}
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
         package: .
         type: zip
         startup-command: 'python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1'
