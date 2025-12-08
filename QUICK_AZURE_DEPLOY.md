@@ -34,7 +34,11 @@
 ### Step 3: Configure Application Settings
 
 1. Go to **Configuration** → **Application settings**
-2. Click **"+ New application setting"** and add:
+2. **CRITICAL:** First, add this setting to enable dependency installation:
+   - **Name:** `SCM_DO_BUILD_DURING_DEPLOYMENT`
+   - **Value:** `true`
+   - This ensures Azure installs packages from `requirements.txt`
+3. Click **"+ New application setting"** and add:
 
    | Name | Value |
    |------|-------|
@@ -47,7 +51,7 @@
    | `HF_HUB_DISABLE_EXPERIMENTAL_WARNING` | `1` |
    | `TRANSFORMERS_NO_ADVISORY_WARNINGS` | `1` |
 
-3. Click **"Save"** at the top
+4. Click **"Save"** at the top
 
 ### Step 4: Set Startup Command
 
@@ -139,8 +143,9 @@ az webapp up --name cn-chatbot-app --resource-group cn-chatbot-rg --runtime "PYT
 
 **Service not starting:**
 - Check **Log stream** in Azure Portal
-- Verify startup command is set to `startup.sh`
+- Verify startup command is set to `startup.sh` or `python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1`
 - Check application settings are correct
+- **"No module named uvicorn"**: Ensure `SCM_DO_BUILD_DURING_DEPLOYMENT=true` is set, then redeploy
 
 **502 Bad Gateway:**
 - Wait 30-60 seconds (first request loads models)

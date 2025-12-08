@@ -24,10 +24,9 @@ stages:
         versionSpec: '$(pythonVersion)'
       displayName: 'Use Python $(pythonVersion)'
 
-    - script: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-      displayName: 'Install dependencies'
+    # Note: We don't install dependencies here because Azure App Service
+    # will install them from requirements.txt during deployment
+    # This ensures dependencies are installed in the correct environment
 
     - task: ArchiveFiles@2
       displayName: 'Archive files'
@@ -59,5 +58,12 @@ stages:
               azureSubscription: 'Azure Service Connection'  # You'll create this
               appName: '$(azureWebAppName)'
               package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
-              startUpCommand: 'startup.sh'
+              startUpCommand: 'python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1'
+              appSettings: |
+                [
+                  {
+                    "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+                    "value": "true"
+                  }
+                ]
 
