@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_WEBAPP_NAME: cn-chatbot  # Set this to your Azure App Service name
+  AZURE_WEBAPP_NAME: cn-chatbot-app-avgchjh7bhckhycn  # Update with your actual Azure App Service name
   PYTHON_VERSION: '3.11'
 
 jobs:
@@ -23,16 +23,13 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
     - name: Deploy to Azure Web App
       id: deploy-to-webapp
-      uses: azure/webapps-deploy@v2
+      uses: azure/webapps-deploy@v3
       with:
         app-name: ${{ env.AZURE_WEBAPP_NAME }}
         publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
         package: .
+        type: zip
+        startup-command: 'python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1'
 
