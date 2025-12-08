@@ -2,7 +2,7 @@
 
 This guide explains how to set up GitHub Actions to deploy to Azure App Service.
 
-## Option 1: Using Azure Service Principal (Recommended)
+## Option 1: Using Publish Profile (Recommended - Simplest)
 
 ### Step 1: Create Azure Service Principal
 
@@ -60,7 +60,7 @@ Update these values in the workflow file:
 - `AZURE_WEBAPP_NAME`: Your actual App Service name
 - `AZURE_RESOURCE_GROUP`: Your resource group name
 
-## Option 2: Using Publish Profile (Alternative)
+## Option 2: Using Azure Service Principal (Alternative)
 
 If you prefer using Publish Profile instead:
 
