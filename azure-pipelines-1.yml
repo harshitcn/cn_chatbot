@@ -1,23 +1,13 @@
-# Python to Linux Web App on Azure (revised)
+# Python to Linux Web App on Azure (robust packaging)
 trigger:
 - none
 
 variables:
-  # Azure Resource Manager connection created during pipeline creation
   azureServiceConnectionId: 'a69dee84-ab3a-4b65-8bf8-34e59926233f'
-
-  # Web app name
   webAppName: 'cn-chatbot'
-
-  # Agent VM image name
   vmImageName: 'ubuntu-latest'
-
-  # Environment name
   environmentName: 'cn-chatbot'
-
-  # Project root folder. Point to the folder containing manage.py file.
   projectRoot: $(System.DefaultWorkingDirectory)
-
   pythonVersion: '3.11'
 
 stages:
@@ -33,39 +23,73 @@ stages:
         versionSpec: '$(pythonVersion)'
       displayName: 'Use Python $(pythonVersion)'
 
-    # Optional: show largest folders to help debugging (can remove later)
+    # Debug: show disk usage so we can catch space issues early
     - script: |
-        echo "Disk usage before packaging:"
+        echo "Disk usage (df):"
         df -h .
         echo
-        echo "Top folders (depth=2):"
+        echo "Top folders in repo (du):"
         du -h --max-depth=2 | sort -h | tail -n 20 || true
       workingDirectory: $(projectRoot)
       displayName: 'Show disk usage (debug)'
 
-    # Remove any local virtualenv if present to save space
+    # Ensure no local venv or caches remain
     - script: |
-        echo "Removing local virtualenv folders (if any) to save disk space..."
+        echo "Cleaning common virtualenv/cache folders to free space..."
         rm -rf antenv .venv venv || true
-        echo "Removing pip cache (if any)..."
         rm -rf ~/.cache/pip || true
-      displayName: 'Prune local venv and pip cache'
+        echo "Clean done."
       workingDirectory: $(projectRoot)
+      displayName: 'Prune local venvs & pip cache'
 
-    # Ensure artifact staging directory exists then create zip while excluding heavy folders/files
+    # Create artifact staging and build a robust include-list for the zip
     - script: |
-        echo "Preparing artifact staging directory..."
-        mkdir -p $(Build.ArtifactStagingDirectory)
-        cd $(projectRoot)
+        set -euo pipefail
 
-        echo "Creating ZIP: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip"
-        /usr/bin/zip -r "$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip" . \
-          -x "antenv/*" ".venv/*" "venv/*" ".git/*" ".github/*" "data/*" "models/*" \
-             "__pycache__/*" "*.pyc" "*/.cache/*" "*.pt" "*.bin" "*.ckpt" "*.tar.gz" \
-             "$(Build.ArtifactStagingDirectory)/*"
-        echo "ZIP completed. Resulting file:"
-        ls -lh "$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip" || true
-      displayName: 'Create ZIP excluding venv, git, caches, large files'
+        ARTIFACT_ZIP="$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip"
+        mkdir -p "$(Build.ArtifactStagingDirectory)"
+        cd "$(projectRoot)"
+
+        # Candidate items that are typically required for Python web apps.
+        candidates=( \
+          "app" "src" "www" "manage.py" "wsgi.py" "requirements.txt" \
+          "runtime.txt" "startup.sh" "startup" "Procfile" ".deployment" \
+          "render.yaml" "package.json" "package-lock.json" "yarn.lock" \
+          "static" "templates" "Dockerfile" \
+        )
+
+        include_args=()
+
+        echo "Checking for typical app files/folders..."
+        for c in "${candidates[@]}"; do
+          if [ -e "$c" ]; then
+            echo "  -> including: $c"
+            include_args+=("$c")
+          fi
+        done
+
+        # If we found at least one expected item, create a zip of only those items.
+        if [ ${#include_args[@]} -gt 0 ]; then
+          echo "Creating ZIP from explicit include list..."
+          # Use -q to reduce noise; remove -q if you want verbose output.
+          /usr/bin/zip -r -q "$ARTIFACT_ZIP" "${include_args[@]}"
+        else
+          echo "No standard app items found. Falling back to packaging repo root but excluding large/unneeded patterns..."
+          # Fallback: package everything except known heavy things
+          /usr/bin/zip -r -q "$ARTIFACT_ZIP" . \
+            -x "antenv/*" ".venv/*" "venv/*" ".git/*" ".github/*" \
+               "data/*" "models/*" "node_modules/*" "__pycache__/*" \
+               "*.pyc" "*/.cache/*" "*.pt" "*.bin" "*.ckpt" "*.tar.gz" \
+               "$(Build.ArtifactStagingDirectory)/*"
+        fi
+
+        echo "ZIP created at: $ARTIFACT_ZIP"
+        echo "Size and listing:"
+        ls -lh "$ARTIFACT_ZIP" || true
+        echo
+        echo "Contents of ZIP (first 200 lines):"
+        unzip -l "$ARTIFACT_ZIP" | sed -n '1,200p' || true
+      displayName: 'Create artifact ZIP (explicit includes, safe fallback)'
       workingDirectory: $(projectRoot)
 
     - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
