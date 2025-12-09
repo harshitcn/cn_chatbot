@@ -1,4 +1,4 @@
-# Python to Linux Web App on Azure (robust packaging)
+# Python to Linux Web App on Azure
 trigger:
 - none
 
@@ -12,94 +12,52 @@ variables:
 
 stages:
 - stage: Build
-  displayName: Build stage
   jobs:
   - job: BuildJob
     pool:
       vmImage: $(vmImageName)
     steps:
+
     - task: UsePythonVersion@0
       inputs:
         versionSpec: '$(pythonVersion)'
-      displayName: 'Use Python $(pythonVersion)'
 
-    # Debug: show disk usage so we can catch space issues early
+    # delete venv before archive so Azure builds its own
     - script: |
-        echo "Disk usage (df):"
-        df -h .
-        echo
-        echo "Top folders in repo (du):"
-        du -h --max-depth=2 | sort -h | tail -n 20 || true
-      workingDirectory: $(projectRoot)
-      displayName: 'Show disk usage (debug)'
-
-    # Ensure no local venv or caches remain
-    - script: |
-        echo "Cleaning common virtualenv/cache folders to free space..."
-        rm -rf antenv .venv venv || true
+        rm -rf antenv .venv venv
         rm -rf ~/.cache/pip || true
-        echo "Clean done."
-      workingDirectory: $(projectRoot)
-      displayName: 'Prune local venvs & pip cache'
+      displayName: "Remove Python venv & cache"
 
-    # Create artifact staging and build a robust include-list for the zip
-    - script: |
-        set -euo pipefail
+    - task: ArchiveFiles@2
+      displayName: 'Archive files'
+      inputs:
+        rootFolderOrFile: '$(projectRoot)'
+        includeRootFolder: false
+        archiveType: zip
+        archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+        replaceExistingArchive: true
 
-        ARTIFACT_ZIP="$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip"
-        mkdir -p "$(Build.ArtifactStagingDirectory)"
-        cd "$(projectRoot)"
-
-        # Candidate items that are typically required for Python web apps.
-        candidates=( \
-          "app" "src" "www" "manage.py" "wsgi.py" "requirements.txt" \
-          "runtime.txt" "startup.sh" "startup" "Procfile" ".deployment" \
-          "render.yaml" "package.json" "package-lock.json" "yarn.lock" \
-          "static" "templates" "Dockerfile" \
-        )
-
-        include_args=()
-
-        echo "Checking for typical app files/folders..."
-        for c in "${candidates[@]}"; do
-          if [ -e "$c" ]; then
-            echo "  -> including: $c"
-            include_args+=("$c")
-          fi
-        done
-
-        # If we found at least one expected item, create a zip of only those items.
-        if [ ${#include_args[@]} -gt 0 ]; then
-          echo "Creating ZIP from explicit include list..."
-          # Use -q to reduce noise; remove -q if you want verbose output.
-          /usr/bin/zip -r -q "$ARTIFACT_ZIP" "${include_args[@]}"
-        else
-          echo "No standard app items found. Falling back to packaging repo root but excluding large/unneeded patterns..."
-          # Fallback: package everything except known heavy things
-          /usr/bin/zip -r -q "$ARTIFACT_ZIP" . \
-            -x "antenv/*" ".venv/*" "venv/*" ".git/*" ".github/*" \
-               "data/*" "models/*" "node_modules/*" "__pycache__/*" \
-               "*.pyc" "*/.cache/*" "*.pt" "*.bin" "*.ckpt" "*.tar.gz" \
-               "$(Build.ArtifactStagingDirectory)/*"
-        fi
-
-        echo "ZIP created at: $ARTIFACT_ZIP"
-        echo "Size and listing:"
-        ls -lh "$ARTIFACT_ZIP" || true
-        echo
-        echo "Contents of ZIP (first 200 lines):"
-        unzip -l "$ARTIFACT_ZIP" | sed -n '1,200p' || true
-      displayName: 'Create artifact ZIP (explicit includes, safe fallback)'
-      workingDirectory: $(projectRoot)
+        # KEEP everything except these:
+        archiveFilePatterns: |
+          -!antenv/**
+          -!.venv/**
+          -!venv/**
+          -!.git/**
+          -!.github/**
+          -!data/**
+          -!__pycache__/**
+          -!**/*.pyc
+          -!**/*.log
+          -!*.pt
+          -!*.bin
+          -!*.ckpt
+          -!*.tar.gz
 
     - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
-      displayName: 'Upload package'
       artifact: drop
 
 - stage: Deploy
-  displayName: 'Deploy Web App'
   dependsOn: Build
-  condition: succeeded()
   jobs:
   - deployment: DeploymentJob
     pool:
@@ -109,14 +67,11 @@ stages:
       runOnce:
         deploy:
           steps:
-
           - task: UsePythonVersion@0
             inputs:
               versionSpec: '$(pythonVersion)'
-            displayName: 'Use Python version'
 
           - task: AzureWebApp@1
-            displayName: 'Deploy Azure Web App : cn-chatbot'
             inputs:
               azureSubscription: $(azureServiceConnectionId)
               appName: $(webAppName)
