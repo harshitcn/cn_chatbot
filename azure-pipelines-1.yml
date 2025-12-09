@@ -47,13 +47,16 @@ stages:
       displayName: "Install requirements"
 
     - task: ArchiveFiles@2
-      displayName: 'Archive files'
       inputs:
         rootFolderOrFile: '$(projectRoot)'
         includeRootFolder: false
         archiveType: zip
         archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
         replaceExistingArchive: true
+        # exclude virtual environment
+        archiveFilePatterns: |
+          -!antenv/**
+
 
     - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
       displayName: 'Upload package'
