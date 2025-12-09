@@ -1,6 +1,6 @@
 # Python to Linux Web App on Azure
 trigger:
-- none
+- main
 
 variables:
   azureServiceConnectionId: 'a69dee84-ab3a-4b65-8bf8-34e59926233f'
@@ -57,3 +57,5 @@ stages:
               azureSubscription: $(azureServiceConnectionId)
               appName: $(webAppName)
               package: $(Pipeline.Workspace)/drop/$(Build.BuildId).zip
+              enableCustomDeployment: true
+              stopAppDuringDeployment: true
