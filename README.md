@@ -191,6 +191,47 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 The API will be available at `http://localhost:8000`
 
+## Railway.app Deployment (Recommended - Free Tier with $5 Credit)
+
+### Prerequisites
+
+1. Railway account (sign up at [railway.app](https://railway.app))
+2. GitHub repository with code
+
+### Quick Start
+
+1. **Sign up and create project:**
+   - Go to [railway.app](https://railway.app)
+   - Click "New Project" → "Deploy from GitHub repo"
+   - Select your repository: `harshitcn/cn_chatbot`
+   - Click "Deploy Now"
+
+2. **Configure environment variables:**
+   - Go to your project → **Variables** tab
+   - Add these variables:
+     - `APP_ENV=production`
+     - `PYTHONUNBUFFERED=1`
+     - `TOKENIZERS_PARALLELISM=false`
+     - `OMP_NUM_THREADS=1`
+     - `MKL_NUM_THREADS=1`
+
+3. **Monitor deployment:**
+   - Watch build logs in Railway dashboard
+   - First deployment takes 5-10 minutes
+   - Your app will be available at: `https://your-app.up.railway.app`
+
+### Why Railway?
+
+- ✅ **Always-on** - No spin-down (unlike Render free tier)
+- ✅ **No forced timeouts** - Model loading won't be interrupted
+- ✅ **Free $5 credit** monthly (usually enough for small apps)
+- ✅ **Easy setup** - Automatic GitHub deployments
+- ✅ **Better for ML models** - No timeout issues during model loading
+
+### Detailed Instructions
+
+See [RAILWAY_DEPLOYMENT.md](RAILWAY_DEPLOYMENT.md) for complete step-by-step guide.
+
 ## Render Deployment (Free Tier)
 
 ### Prerequisites
