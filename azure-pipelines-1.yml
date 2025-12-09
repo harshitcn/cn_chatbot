@@ -37,21 +37,6 @@ stages:
         archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
         replaceExistingArchive: true
 
-        # KEEP everything except these:
-        archiveFilePatterns: |
-          -!antenv/**
-          -!.venv/**
-          -!venv/**
-          -!.git/**
-          -!.github/**
-          -!data/**
-          -!__pycache__/**
-          -!**/*.pyc
-          -!**/*.log
-          -!*.pt
-          -!*.bin
-          -!*.ckpt
-          -!*.tar.gz
 
     - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
       artifact: drop
