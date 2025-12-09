@@ -1,8 +1,4 @@
-# Python to Linux Web App on Azure
-# Build your Python project and deploy it to Azure as a Linux Web App.
-# Change python version to one thats appropriate for your application.
-# https://docs.microsoft.com/azure/devops/pipelines/languages/python
-
+# Python to Linux Web App on Azure (revised)
 trigger:
 - none
 
@@ -37,26 +33,40 @@ stages:
         versionSpec: '$(pythonVersion)'
       displayName: 'Use Python $(pythonVersion)'
 
+    # Optional: show largest folders to help debugging (can remove later)
     - script: |
-        python -m venv antenv
-        source antenv/bin/activate
-        python -m pip install --upgrade pip
-        pip install setup
-        pip install -r requirements.txt
+        echo "Disk usage before packaging:"
+        df -h .
+        echo
+        echo "Top folders (depth=2):"
+        du -h --max-depth=2 | sort -h | tail -n 20 || true
       workingDirectory: $(projectRoot)
-      displayName: "Install requirements"
+      displayName: 'Show disk usage (debug)'
 
-    - task: ArchiveFiles@2
-      inputs:
-        rootFolderOrFile: '$(projectRoot)'
-        includeRootFolder: false
-        archiveType: zip
-        archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
-        replaceExistingArchive: true
-        # exclude virtual environment
-        archiveFilePatterns: |
-          -!antenv/**
+    # Remove any local virtualenv if present to save space
+    - script: |
+        echo "Removing local virtualenv folders (if any) to save disk space..."
+        rm -rf antenv .venv venv || true
+        echo "Removing pip cache (if any)..."
+        rm -rf ~/.cache/pip || true
+      displayName: 'Prune local venv and pip cache'
+      workingDirectory: $(projectRoot)
 
+    # Ensure artifact staging directory exists then create zip while excluding heavy folders/files
+    - script: |
+        echo "Preparing artifact staging directory..."
+        mkdir -p $(Build.ArtifactStagingDirectory)
+        cd $(projectRoot)
+
+        echo "Creating ZIP: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip"
+        /usr/bin/zip -r "$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip" . \
+          -x "antenv/*" ".venv/*" "venv/*" ".git/*" ".github/*" "data/*" "models/*" \
+             "__pycache__/*" "*.pyc" "*/.cache/*" "*.pt" "*.bin" "*.ckpt" "*.tar.gz" \
+             "$(Build.ArtifactStagingDirectory)/*"
+        echo "ZIP completed. Resulting file:"
+        ls -lh "$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip" || true
+      displayName: 'Create ZIP excluding venv, git, caches, large files'
+      workingDirectory: $(projectRoot)
 
     - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
       displayName: 'Upload package'
