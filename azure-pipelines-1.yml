@@ -22,11 +22,7 @@ stages:
       inputs:
         versionSpec: '$(pythonVersion)'
 
-    # delete venv before archive so Azure builds its own
-    - script: |
-        rm -rf antenv .venv venv
-        rm -rf ~/.cache/pip || true
-      displayName: "Remove Python venv & cache"
+   
 
     - task: ArchiveFiles@2
       displayName: 'Archive files'
