@@ -62,7 +62,6 @@ def get_embeddings() -> HuggingFaceEmbeddings:
         encode_kwargs={
             "normalize_embeddings": True,
             "batch_size": 1,  # Process one at a time to save memory
-            "show_progress_bar": False,
             "convert_to_numpy": True,  # Use numpy instead of torch tensors
         }
     )

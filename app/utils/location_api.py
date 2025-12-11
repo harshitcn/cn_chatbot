@@ -48,7 +48,6 @@ class LocationAPIClient:
                 headers["Authorization"] = f"Bearer {self.api_key}"
                 # Or if API key is passed as query param:
                 # headers["X-API-Key"] = self.api_key
-            breakpoint()
             params = {"location": location_name}
             if self.api_key and "?" in self.slug_api_url:
                 # If API key should be in query params
