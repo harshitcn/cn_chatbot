@@ -24,12 +24,14 @@ class LocationAPIClient:
         self.api_key = getattr(self.settings, 'location_api_key', None)
         self.timeout = 10.0  # 10 seconds timeout
     
-    async def get_location_slug(self, location_name: str) -> Optional[str]:
+    async def get_location_slug(self, location_name: str, question: Optional[str] = None) -> Optional[str]:
         """
         Get location slug from location name using the first API.
+        Optionally includes the full question/prompt for better context.
         
         Args:
             location_name: Name of the location (e.g., "New York", "London")
+            question: Optional full question/prompt from the user
             
         Returns:
             Optional[str]: Location slug if found, None otherwise
@@ -48,17 +50,42 @@ class LocationAPIClient:
                 headers["Authorization"] = f"Bearer {self.api_key}"
                 # Or if API key is passed as query param:
                 # headers["X-API-Key"] = self.api_key
-            params = {"location": location_name}
-            if self.api_key and "?" in self.slug_api_url:
-                # If API key should be in query params
-                params["api_key"] = self.api_key
+            # Determine if we should use POST (if URL contains /api/ or ends with /) or GET
+            use_post = "/api/" in self.slug_api_url.lower() or self.slug_api_url.endswith("/")
             
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    self.slug_api_url,
-                    headers=headers,
-                    params=params
-                )
+            if use_post:
+                # Use POST with JSON body
+                headers["Content-Type"] = "application/json"
+                body = {"location": location_name}
+                if question:
+                    body["question"] = question
+                    body["query"] = question  # Some APIs might use "query" instead
+                if self.api_key:
+                    body["api_key"] = self.api_key
+                
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        self.slug_api_url,
+                        headers=headers,
+                        json=body
+                    )
+            else:
+                # Use GET with query params
+                params = {"location": location_name}
+                # Include question/prompt if provided
+                if question:
+                    params["question"] = question
+                    params["query"] = question  # Some APIs might use "query" instead
+                if self.api_key and "?" in self.slug_api_url:
+                    # If API key should be in query params
+                    params["api_key"] = self.api_key
+                
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(
+                        self.slug_api_url,
+                        headers=headers,
+                        params=params
+                    )
                 response.raise_for_status()
                 data = response.json()
                 
@@ -95,12 +122,14 @@ class LocationAPIClient:
             logger.error(f"Error fetching location slug for '{location_name}': {str(e)}")
             return None
     
-    async def get_location_data(self, slug: str) -> Optional[Dict[str, Any]]:
+    async def get_location_data(self, slug: str, question: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get location-specific data using the slug from the second API.
+        Optionally includes the full question/prompt for better context.
         
         Args:
             slug: Location slug obtained from the first API
+            question: Optional full question/prompt from the user
             
         Returns:
             Optional[Dict[str, Any]]: Location data if found, None otherwise
@@ -131,16 +160,41 @@ class LocationAPIClient:
                 else:
                     url = f"{url}?slug={slug}"
             
-            params = {}
-            if self.api_key and "?" in url:
-                params["api_key"] = self.api_key
+            # Determine if we should use POST (if URL contains /api/ or ends with /) or GET
+            use_post = "/api/" in url.lower() or url.endswith("/")
             
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    url,
-                    headers=headers,
-                    params=params if params else None
-                )
+            if use_post:
+                # Use POST with JSON body
+                headers["Content-Type"] = "application/json"
+                body = {"slug": slug}
+                if question:
+                    body["question"] = question
+                    body["query"] = question  # Some APIs might use "query" instead
+                if self.api_key:
+                    body["api_key"] = self.api_key
+                
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        url,
+                        headers=headers,
+                        json=body
+                    )
+            else:
+                # Use GET with query params
+                params = {}
+                # Include question/prompt if provided
+                if question:
+                    params["question"] = question
+                    params["query"] = question  # Some APIs might use "query" instead
+                if self.api_key and "?" in url:
+                    params["api_key"] = self.api_key
+                
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(
+                        url,
+                        headers=headers,
+                        params=params if params else None
+                    )
                 response.raise_for_status()
                 data = response.json()
                 
@@ -154,20 +208,25 @@ class LocationAPIClient:
             logger.error(f"Error fetching location data for slug '{slug}': {str(e)}")
             return None
     
-    async def get_location_info(self, location_name: str) -> Optional[Dict[str, Any]]:
+    async def get_location_info(self, location_name: str, question: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Complete flow: Get slug from location name, then get location data.
+        Complete flow: Get slug from location name (with question context), 
+        then get location data using the slug (with question context).
         
         Args:
             location_name: Name of the location
+            question: Optional full question/prompt from the user
             
         Returns:
             Optional[Dict[str, Any]]: Location data if found, None otherwise
         """
-        slug = await self.get_location_slug(location_name)
+        logger.info(f"Fetching location slug for '{location_name}' with question context")
+        slug = await self.get_location_slug(location_name, question)
         if not slug:
+            logger.warning(f"No slug found for location '{location_name}'")
             return None
         
-        location_data = await self.get_location_data(slug)
+        logger.info(f"Found slug '{slug}', now fetching location data with question context")
+        location_data = await self.get_location_data(slug, question)
         return location_data
 

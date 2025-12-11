@@ -2,6 +2,7 @@
 LangChain chains and retrieval logic.
 Handles the semantic search and answer retrieval from FAQ data.
 """
+import logging
 from typing import List, Optional, Dict, Any
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -20,14 +21,22 @@ class FAQRetriever:
     Supports both static FAQ data and location-based data.
     """
     
-    def __init__(self, top_k: int = 1):
+    def __init__(self, top_k: int = 1, similarity_threshold: float = 1.5):
         """
         Initialize the FAQ retriever.
         
         Args:
             top_k: Number of top results to return (default: 1 for best match)
+            similarity_threshold: Maximum distance threshold for relevant answers (default: 1.5)
+                                 Answers with distance > threshold will return default response
+                                 For normalized embeddings with L2 distance:
+                                 - 0.0-0.8: Very similar
+                                 - 0.8-1.2: Similar
+                                 - 1.2-1.5: Somewhat related
+                                 - >1.5: Poor match, return default
         """
         self.top_k = top_k
+        self.similarity_threshold = similarity_threshold
         self.vector_store: Optional[FAISS] = None
         self.location_detector = LocationDetector()
         self.location_api_client = LocationAPIClient()
@@ -38,7 +47,6 @@ class FAQRetriever:
         Optimized for memory usage on free tier platforms.
         """
         import gc
-        import logging
         logger = logging.getLogger(__name__)
         
         try:
@@ -206,6 +214,8 @@ class FAQRetriever:
         Returns:
             str: Best matching answer from FAQ data (static + location-based if applicable)
         """
+        logger = logging.getLogger(__name__)
+        
         if not self.vector_store:
             self._initialize_vector_store()
         
@@ -216,30 +226,139 @@ class FAQRetriever:
         # If location is detected, fetch location data and merge with static data
         if location_name:
             try:
-                location_data = await self.location_api_client.get_location_info(location_name)
+                logger.info(f"Location detected: '{location_name}' in question: '{question[:100]}'")
+                # Pass the full question to the API for better context
+                location_data = await self.location_api_client.get_location_info(location_name, question)
                 if location_data:
+                    logger.info(f"Successfully fetched location data for '{location_name}'")
                     # Convert location data to FAQ format
                     location_faq_data = self._convert_location_data_to_faq(location_data, location_name)
                     
                     # Merge with static FAQ data
                     vector_store = self._merge_location_data_with_faq(location_faq_data)
+                else:
+                    logger.warning(f"No location data returned for '{location_name}'")
             except Exception as e:
                 # Log error but continue with static data only
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(f"Error fetching location data for '{location_name}': {str(e)}. Using static data only.")
         
-        # Perform similarity search
-        results: List[Document] = vector_store.similarity_search(
-            question,
-            k=self.top_k
-        )
+        # Default response when no relevant answer is found
+        DEFAULT_RESPONSE = "I'm sorry, I don't have information about that. Please try asking about our services, programs, or locations, or contact our support team for assistance."
         
-        # Return the answer from the top result
-        if results and len(results) > 0:
-            return results[0].metadata.get("answer", "I'm sorry, I couldn't find an answer to that question.")
-        else:
-            return "I'm sorry, I couldn't find an answer to that question. Please try rephrasing your question."
+        # Perform similarity search with scores to check relevance
+        # Get multiple results to enable relative comparison
+        try:
+            results_with_scores = vector_store.similarity_search_with_score(
+                question,
+                k=min(3, self.top_k + 2)  # Get a few more results for comparison
+            )
+            
+            # Check if we have results
+            if results_with_scores and len(results_with_scores) > 0:
+                # Log all top results for debugging
+                logger.info(f"Top {len(results_with_scores)} similarity search results:")
+                for idx, (result, score) in enumerate(results_with_scores):
+                    matched_question = result.page_content[:100] if result.page_content else "N/A"
+                    logger.info(f"  {idx+1}. Score: {score:.4f} - Question: {matched_question}")
+                
+                top_result, top_score = results_with_scores[0]
+                matched_question = top_result.page_content
+                
+                # For normalized embeddings with L2 distance:
+                # - Lower score (distance) = more similar
+                # - Distance ranges from 0 (identical) to 2 (opposite)
+                # - Typical good matches have distance < 1.0-1.2
+                # - Very poor matches have distance > 1.5
+                
+                # Try to find a better match by checking if any result has a question that starts similarly
+                # This helps when the semantic search finds a related but not exact match
+                best_result = top_result
+                best_score = top_score
+                
+                # Normalize the user question for comparison
+                user_question_lower = question.lower().strip()
+                user_question_words = set(user_question_lower.split())
+                
+                # Remove common stop words for better matching
+                stop_words = {'what', 'is', 'are', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'does', 'do', 'how', 'can', 'will', 'would', 'should', 'could'}
+                user_keywords = user_question_words - stop_words
+                
+                # Check if any result has a question that's a better text match
+                for result, score in results_with_scores:
+                    if score > self.similarity_threshold:
+                        continue  # Skip results that are too dissimilar
+                    
+                    result_question = result.page_content.lower()
+                    result_words = set(result_question.split())
+                    result_keywords = result_words - stop_words
+                    
+                    # Calculate keyword overlap
+                    common_keywords = user_keywords.intersection(result_keywords)
+                    keyword_overlap_ratio = len(common_keywords) / len(user_keywords) if user_keywords else 0
+                    
+                    # Prefer results where:
+                    # 1. The FAQ question starts with the user's question (or vice versa)
+                    # 2. High keyword overlap (>= 50%)
+                    # 3. The user's question is contained in the FAQ question
+                    is_better_match = False
+                    
+                    if user_question_lower in result_question or result_question.startswith(user_question_lower[:30]):
+                        # User question is a subset of FAQ question - this is likely the best match
+                        is_better_match = True
+                        logger.info(f"Found subset match: user question is in FAQ question")
+                    elif keyword_overlap_ratio >= 0.5 and len(common_keywords) >= 2:
+                        # High keyword overlap - prefer this if score is similar
+                        if score <= best_score + 0.15:  # Allow slightly worse score if keyword match is better
+                            is_better_match = True
+                            logger.info(f"Found high keyword overlap match: {keyword_overlap_ratio:.2%} overlap")
+                    
+                    if is_better_match:
+                        # Update best match if this is better
+                        if score < best_score or (score <= best_score + 0.15 and keyword_overlap_ratio > 0.6):
+                            best_result = result
+                            best_score = score
+                            logger.info(f"Updated best match: {result.page_content[:100]} (score: {score:.4f}, overlap: {keyword_overlap_ratio:.2%})")
+                
+                # Determine if the match is relevant
+                # For normalized embeddings with L2 distance, scores > 1.5 indicate poor matches
+                # We'll be permissive and only reject very poor matches
+                is_relevant = best_score <= self.similarity_threshold
+                
+                # Additional check: if we have multiple results and the top one is much better,
+                # it's likely relevant even if slightly above threshold
+                if not is_relevant and len(results_with_scores) > 1:
+                    second_score = results_with_scores[1][1]
+                    score_gap = second_score - best_score
+                    # If top result is significantly better (gap > 0.2), consider it relevant
+                    if score_gap > 0.2 and best_score < 1.8:
+                        is_relevant = True
+                        logger.info(f"Top result accepted due to significant gap: {score_gap:.4f}")
+                
+                logger.info(f"Selected match - Score: {best_score:.4f}, Threshold: {self.similarity_threshold}, Relevant: {is_relevant}")
+                logger.info(f"Matched question: {best_result.page_content[:150]}")
+                
+                if is_relevant:
+                    answer = best_result.metadata.get("answer", DEFAULT_RESPONSE)
+                    # Additional check: if answer is empty or too short, return default
+                    if answer and len(answer.strip()) > 10:
+                        logger.info(f"Returning answer with score {best_score:.4f}")
+                        return answer
+                    else:
+                        logger.info(f"Answer found but too short or empty, returning default response. Score: {best_score}")
+                        return DEFAULT_RESPONSE
+                else:
+                    # Score is too high, meaning low similarity
+                    logger.info(f"No relevant answer found. Best match score: {best_score:.4f} exceeds threshold: {self.similarity_threshold}")
+                    return DEFAULT_RESPONSE
+            else:
+                # No results found
+                logger.info("No results found in vector store")
+                return DEFAULT_RESPONSE
+                
+        except Exception as e:
+            # If similarity search fails, return default response
+            logger.warning(f"Error during similarity search: {str(e)}. Returning default response.")
+            return DEFAULT_RESPONSE
 
 
 # Global retriever instance (initialized lazily)

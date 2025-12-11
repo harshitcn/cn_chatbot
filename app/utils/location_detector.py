@@ -66,7 +66,7 @@ class LocationDetector:
                     # Find the location part (usually the longest capitalized word)
                     location = None
                     for part in match:
-                        if part and len(part) > 2 and part[0].isupper():
+                        if part and len(part) > 2:
                             # Check if it's not a common word or excluded word
                             part_lower = part.lower()
                             if (part_lower not in ['in', 'at', 'from', 'near', 'around', 'city', 'state', 'country', 'location', 'place', 'area', 'region'] and
