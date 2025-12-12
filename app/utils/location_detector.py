@@ -15,6 +15,7 @@ class LocationDetector:
     # Common location patterns
     LOCATION_PATTERNS = [
         r'\b(in|at|from|near|around)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "in New York", "at London"
+        r'\b(in|at|from|near|around)\s+([a-z]+(?:\s+[a-z]+)+)',  # "at alamo ranch", "in new york" (lowercase)
         r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(city|state|country|location)',  # "New York city"
         r'\bI\s+(am|live|located)\s+(in|at|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "I am in New York"
         r'\b(location|place|area|region):\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "location: New York"
@@ -63,7 +64,7 @@ class LocationDetector:
                 match = matches[-1]
                 # Extract location from tuple (pattern might return multiple groups)
                 if isinstance(match, tuple):
-                    # Find the location part (usually the longest capitalized word)
+                    # Find the location part (usually the longest capitalized or lowercase word)
                     location = None
                     for part in match:
                         if part and len(part) > 2:
@@ -74,24 +75,61 @@ class LocationDetector:
                                 if location is None or len(part) > len(location):
                                     location = part
                     if location:
+                        # Capitalize first letter of each word if lowercase
+                        if location and not location[0].isupper():
+                            location = ' '.join(word.capitalize() for word in location.split())
                         return location.strip()
-                elif isinstance(match, str) and match[0].isupper() and len(match) > 2:
+                elif isinstance(match, str) and len(match) > 2:
                     # Check if it's not an excluded word
-                    if match.lower() not in self.EXCLUDED_WORDS:
+                    match_lower = match.lower()
+                    if match_lower not in self.EXCLUDED_WORDS:
+                        # Capitalize first letter of each word if lowercase
+                        if not match[0].isupper():
+                            match = ' '.join(word.capitalize() for word in match.split())
                         return match.strip()
         
         # Fallback: Look for capitalized words that might be locations
-        # This is a simple heuristic - you might want to use NLP for better results
+        # Also check for lowercase location names after location keywords
         words = text.split()
+        text_lower = text.lower()
+        
+        # First, check for lowercase locations after location keywords (e.g., "at alamo ranch")
+        for i, word in enumerate(words):
+            clean_word = re.sub(r'[^\w\s]', '', word)
+            clean_word_lower = clean_word.lower()
+            
+            # Check if this is a location keyword
+            if clean_word_lower in self.LOCATION_KEYWORDS:
+                # Look ahead for potential location name (next 1-3 words)
+                location_parts = []
+                for j in range(i + 1, min(i + 4, len(words))):
+                    next_word = re.sub(r'[^\w\s]', '', words[j])
+                    next_word_lower = next_word.lower()
+                    
+                    # Stop if we hit another location keyword or excluded word
+                    if (next_word_lower in self.LOCATION_KEYWORDS or 
+                        next_word_lower in self.EXCLUDED_WORDS):
+                        break
+                    
+                    # Collect if it's a valid word
+                    if len(next_word) > 2:
+                        location_parts.append(next_word)
+                
+                if location_parts:
+                    location_name = ' '.join(location_parts)
+                    # Capitalize first letter of each word for better matching
+                    location_title = ' '.join(word.capitalize() for word in location_parts)
+                    return location_title
+        
+        # Second, check for capitalized sequences
         capitalized_sequences = []
         current_sequence = []
         
         for word in words:
-            # Remove punctuation
             clean_word = re.sub(r'[^\w\s]', '', word)
             if clean_word and clean_word[0].isupper() and len(clean_word) > 2:
-                # Skip excluded words (common question words, pronouns, etc.)
-                if clean_word.lower() not in self.EXCLUDED_WORDS:
+                clean_word_lower = clean_word.lower()
+                if clean_word_lower not in self.EXCLUDED_WORDS:
                     current_sequence.append(clean_word)
             else:
                 if current_sequence:
@@ -101,24 +139,17 @@ class LocationDetector:
         if current_sequence:
             capitalized_sequences.append(' '.join(current_sequence))
         
-        # Return the longest capitalized sequence if found
-        # Only return if there's a location keyword nearby (more strict)
-        if capitalized_sequences:
-            # Check if any location keywords are nearby
-            text_lower = text.lower()
-            for seq in capitalized_sequences:
-                seq_lower = seq.lower()
-                # Skip if the sequence itself is an excluded word
-                if seq_lower in self.EXCLUDED_WORDS:
-                    continue
-                # Check if location keywords appear near this sequence
-                for keyword in self.LOCATION_KEYWORDS:
-                    if keyword in text_lower:
-                        # Check proximity
-                        seq_pos = text_lower.find(seq_lower)
-                        keyword_pos = text_lower.find(keyword)
-                        if abs(seq_pos - keyword_pos) < 50:  # Within 50 characters
-                            return seq
+        # Return capitalized sequences if location keywords are nearby
+        for seq in capitalized_sequences:
+            seq_lower = seq.lower()
+            if seq_lower in self.EXCLUDED_WORDS:
+                continue
+            for keyword in self.LOCATION_KEYWORDS:
+                if keyword in text_lower:
+                    seq_pos = text_lower.find(seq_lower)
+                    keyword_pos = text_lower.find(keyword)
+                    if abs(seq_pos - keyword_pos) < 50:
+                        return seq
         
         return None
     

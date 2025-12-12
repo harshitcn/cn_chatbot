@@ -44,76 +44,102 @@ class LocationAPIClient:
             return None
         
         try:
-            # Prepare request
+            # Prepare request - Use GET method for slug API
             headers = {}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
                 # Or if API key is passed as query param:
                 # headers["X-API-Key"] = self.api_key
-            # Determine if we should use POST (if URL contains /api/ or ends with /) or GET
-            use_post = "/api/" in self.slug_api_url.lower() or self.slug_api_url.endswith("/")
             
-            if use_post:
-                # Use POST with JSON body
-                headers["Content-Type"] = "application/json"
-                body = {"location": location_name}
-                if question:
-                    body["question"] = question
-                    body["query"] = question  # Some APIs might use "query" instead
-                if self.api_key:
-                    body["api_key"] = self.api_key
+            # Use GET with query params
+            params = {"location": location_name}
+            # Include question/prompt if provided
+            if question:
+                params["question"] = question
+                params["query"] = question  # Some APIs might use "query" instead
+            if self.api_key and "?" in self.slug_api_url:
+                # If API key should be in query params
+                params["api_key"] = self.api_key
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    self.slug_api_url,
+                    headers=headers,
+                    params=params
+                )
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            # Extract slug from response
+            # Handle both dict and list responses
+            slug = None
+            
+            # Normalize location name to Camel Case (Title Case) for matching
+            # "alamo ranch" -> "Alamo Ranch", "ALAMO RANCH" -> "Alamo Ranch"
+            location_name_normalized = ' '.join(word.capitalize() for word in location_name.split())
+            location_name_lower = location_name_normalized.lower()
+            
+            def normalize_name(name_str: str) -> str:
+                """Normalize a name string to Camel Case for comparison."""
+                if not name_str:
+                    return ""
+                return ' '.join(word.capitalize() for word in str(name_str).split())
+            
+            if isinstance(data, dict):
+                # Dictionary response - check if name matches
+                api_name = data.get("name", "")
+                if api_name:
+                    api_name_normalized = normalize_name(api_name)
+                    # Check for exact match in Camel Case
+                    if api_name_normalized == location_name_normalized or api_name_normalized.lower() == location_name_lower:
+                        slug = data.get("slug")
                 
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        self.slug_api_url,
-                        headers=headers,
-                        json=body
-                    )
-            else:
-                # Use GET with query params
-                params = {"location": location_name}
-                # Include question/prompt if provided
-                if question:
-                    params["question"] = question
-                    params["query"] = question  # Some APIs might use "query" instead
-                if self.api_key and "?" in self.slug_api_url:
-                    # If API key should be in query params
-                    params["api_key"] = self.api_key
-                
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.get(
-                        self.slug_api_url,
-                        headers=headers,
-                        params=params
-                    )
-                response.raise_for_status()
-                data = response.json()
-                
-                # Extract slug from response
-                # Handle both dict and list responses
-                slug = None
-                
-                if isinstance(data, dict):
-                    # Dictionary response
+                # Also check nested structures
+                if not slug:
                     slug = data.get("slug") or data.get("data", {}).get("slug")
-                    # Also check nested structures
-                    if not slug and "data" in data and isinstance(data["data"], dict):
-                        slug = data["data"].get("slug")
-                elif isinstance(data, list) and len(data) > 0:
-                    # List response - check first item
-                    first_item = data[0]
-                    if isinstance(first_item, dict):
-                        slug = first_item.get("slug")
-                    elif isinstance(first_item, str):
-                        # If list contains strings, use first one as slug
-                        slug = first_item
+                if not slug and "data" in data and isinstance(data["data"], dict):
+                    data_obj = data["data"]
+                    api_name = data_obj.get("name", "")
+                    if api_name:
+                        api_name_normalized = normalize_name(api_name)
+                        if api_name_normalized == location_name_normalized or api_name_normalized.lower() == location_name_lower:
+                            slug = data_obj.get("slug")
+                    if not slug:
+                        slug = data_obj.get("slug")
+            elif isinstance(data, list) and len(data) > 0:
+                # List response - search for exact matching location name in "name" field
+                for item in data:
+                    if isinstance(item, dict):
+                        # Check if the "name" field matches the location name (in Camel Case)
+                        item_name = item.get("name", "")
+                        if item_name:
+                            item_name_normalized = normalize_name(item_name)
+                            # Exact match in Camel Case or case-insensitive match
+                            if (item_name_normalized == location_name_normalized or 
+                                item_name_normalized.lower() == location_name_lower):
+                                slug = item.get("slug")
+                                if slug:
+                                    logger.info(f"Matched location name '{item_name_normalized}' with '{location_name_normalized}', found slug: {slug}")
+                                    break
+                    elif isinstance(item, str):
+                        # If list contains strings, normalize and compare
+                        item_normalized = normalize_name(item)
+                        if item_normalized == location_name_normalized or item_normalized.lower() == location_name_lower:
+                            slug = item
+                            logger.info(f"Matched location string '{item_normalized}' with '{location_name_normalized}', using as slug: {slug}")
+                            break
                 
-                if slug:
-                    logger.info(f"Found slug '{slug}' for location '{location_name}'")
-                    return slug
-                else:
-                    logger.warning(f"No slug found in API response for '{location_name}'. Response type: {type(data).__name__}")
-                    return None
+                # Don't use fallback - only return slug if we found an exact match
+                if not slug:
+                    logger.warning(f"No exact match found for location '{location_name_normalized}' in API response. Available names: {[normalize_name(item.get('name', '')) if isinstance(item, dict) else normalize_name(str(item)) for item in data[:5]]}")
+            
+            if slug:
+                logger.info(f"Found slug '{slug}' for location '{location_name}'")
+                return slug
+            else:
+                logger.warning(f"No slug found in API response for '{location_name}'. Response type: {type(data).__name__}")
+                return None
                     
         except httpx.HTTPError as e:
             logger.error(f"HTTP error fetching location slug for '{location_name}': {str(e)}")
@@ -149,57 +175,35 @@ class LocationAPIClient:
                 # Or if API key is passed as query param:
                 # headers["X-API-Key"] = self.api_key
             
-            # Replace {slug} placeholder in URL if present, or append slug
-            url = self.location_data_api_url
-            if "{slug}" in url:
-                url = url.replace("{slug}", slug)
-            else:
-                # Append slug to URL or add as query param
-                if "?" in url:
-                    url = f"{url}&slug={slug}"
-                else:
-                    url = f"{url}?slug={slug}"
+            # Construct URL with /slug/{slug} format
+            # Check if base URL already ends with /slug to avoid duplication
+            url = self.location_data_api_url.rstrip('/')  # Remove trailing slash
+            url_lower = url.lower()
             
-            # Determine if we should use POST (if URL contains /api/ or ends with /) or GET
-            use_post = "/api/" in url.lower() or url.endswith("/")
-            
-            if use_post:
-                # Use POST with JSON body
-                headers["Content-Type"] = "application/json"
-                body = {"slug": slug}
-                if question:
-                    body["question"] = question
-                    body["query"] = question  # Some APIs might use "query" instead
-                if self.api_key:
-                    body["api_key"] = self.api_key
-                
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        url,
-                        headers=headers,
-                        json=body
-                    )
+            # If URL already ends with /slug, just append /{slug}
+            # Otherwise, append /slug/{slug}
+            if url_lower.endswith('/slug'):
+                url = f"{url}/{slug}"
             else:
-                # Use GET with query params
-                params = {}
-                # Include question/prompt if provided
-                if question:
-                    params["question"] = question
-                    params["query"] = question  # Some APIs might use "query" instead
-                if self.api_key and "?" in url:
-                    params["api_key"] = self.api_key
-                
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.get(
-                        url,
-                        headers=headers,
-                        params=params if params else None
-                    )
-                response.raise_for_status()
-                data = response.json()
-                
-                logger.info(f"Successfully fetched location data for slug '{slug}'")
-                return data
+                url = f"{url}/slug/{slug}"
+            
+            # Use GET request for location data API - only pass slug, no question parameter
+            params = None
+            if self.api_key and "?" in url:
+                params = {"api_key": self.api_key}
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    url,
+                    headers=headers,
+                    params=params
+                )
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            logger.info(f"Successfully fetched location data for slug '{slug}'")
+            return data
                 
         except httpx.HTTPError as e:
             logger.error(f"HTTP error fetching location data for slug '{slug}': {str(e)}")
