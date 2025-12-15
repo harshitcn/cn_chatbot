@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     location_data_api_url: str = ""  # URL for the second API that returns location data (use {slug} placeholder)
     location_api_key: str = ""  # API key for location APIs (optional)
     
+    # Web scraping settings
+    scrape_base_url: str = ""  # Base URL for web scraping (e.g., "https://example.com")
+    scrape_url_pattern: str = "{base_url}/locations/{location}"  # URL pattern for scraping (use {base_url}, {location}, {location_name}, {location-slug})
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -99,6 +103,10 @@ def get_settings() -> Settings:
             _settings.location_data_api_url = os.getenv("LOCATION_DATA_API_URL")
         if os.getenv("LOCATION_API_KEY"):
             _settings.location_api_key = os.getenv("LOCATION_API_KEY")
+        if os.getenv("SCRAPE_BASE_URL"):
+            _settings.scrape_base_url = os.getenv("SCRAPE_BASE_URL")
+        if os.getenv("SCRAPE_URL_PATTERN"):
+            _settings.scrape_url_pattern = os.getenv("SCRAPE_URL_PATTERN")
     
     return _settings
 

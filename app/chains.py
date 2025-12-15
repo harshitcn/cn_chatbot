@@ -9,9 +9,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
 from app.faq_data import FAQ_DATA
+from app.predefined_qa import get_predefined_answer
 from app.utils.embeddings import load_or_build_faiss_index, get_embeddings
 from app.utils.location_detector import LocationDetector
 from app.utils.location_api import LocationAPIClient
+from app.utils.web_scraper import WebScraper
 
 
 class FAQRetriever:
@@ -40,6 +42,7 @@ class FAQRetriever:
         self.vector_store: Optional[FAISS] = None
         self.location_detector = LocationDetector()
         self.location_api_client = LocationAPIClient()
+        self.web_scraper = WebScraper()
         self._initialize_vector_store()
     
     def _initialize_vector_store(self):
@@ -205,17 +208,31 @@ class FAQRetriever:
     
     async def get_answer(self, question: str) -> str:
         """
-        Get answer to a user question using semantic search.
-        Detects location in question and fetches location-specific data if available.
+        Get answer to a user question using three-tier approach:
+        1. Check predefined Q&A (exact/precise matching)
+        2. Check FAQ list (semantic search)
+        3. Scrape website for location (if location detected and FAQ doesn't have answer)
         
         Args:
             question: User's question string
         
         Returns:
-            str: Best matching answer from FAQ data (static + location-based if applicable)
+            str: Best matching answer from predefined Q&A, FAQ data, or scraped content
         """
         logger = logging.getLogger(__name__)
         
+        # Default response when no relevant answer is found
+        DEFAULT_RESPONSE = "I'm sorry, I don't have information about that. Please try asking about our services, programs, or locations, or contact our support team for assistance."
+        
+        # TIER 1: Check predefined Q&A first (exact/precise matching)
+        logger.info("Tier 1: Checking predefined Q&A...")
+        predefined_answer = get_predefined_answer(question)
+        if predefined_answer:
+            logger.info("Found answer in predefined Q&A")
+            return predefined_answer
+        logger.info("No match found in predefined Q&A, proceeding to FAQ search...")
+        
+        # TIER 2: Check FAQ list (semantic search)
         if not self.vector_store:
             self._initialize_vector_store()
         
@@ -242,8 +259,7 @@ class FAQRetriever:
                 # Log error but continue with static data only
                 logger.warning(f"Error fetching location data for '{location_name}': {str(e)}. Using static data only.")
         
-        # Default response when no relevant answer is found
-        DEFAULT_RESPONSE = "I'm sorry, I don't have information about that. Please try asking about our services, programs, or locations, or contact our support team for assistance."
+        logger.info("Tier 2: Searching FAQ list...")
         
         # Perform similarity search with scores to check relevance
         # Get multiple results to enable relative comparison
@@ -341,24 +357,37 @@ class FAQRetriever:
                     answer = best_result.metadata.get("answer", DEFAULT_RESPONSE)
                     # Additional check: if answer is empty or too short, return default
                     if answer and len(answer.strip()) > 10:
-                        logger.info(f"Returning answer with score {best_score:.4f}")
+                        logger.info(f"Found answer in FAQ list with score {best_score:.4f}")
                         return answer
                     else:
-                        logger.info(f"Answer found but too short or empty, returning default response. Score: {best_score}")
-                        return DEFAULT_RESPONSE
+                        logger.info(f"Answer found but too short or empty, proceeding to web scraping. Score: {best_score}")
                 else:
                     # Score is too high, meaning low similarity
-                    logger.info(f"No relevant answer found. Best match score: {best_score:.4f} exceeds threshold: {self.similarity_threshold}")
-                    return DEFAULT_RESPONSE
+                    logger.info(f"No relevant answer in FAQ. Best match score: {best_score:.4f} exceeds threshold: {self.similarity_threshold}")
             else:
                 # No results found
-                logger.info("No results found in vector store")
-                return DEFAULT_RESPONSE
+                logger.info("No results found in FAQ list")
                 
         except Exception as e:
-            # If similarity search fails, return default response
-            logger.warning(f"Error during similarity search: {str(e)}. Returning default response.")
-            return DEFAULT_RESPONSE
+            # If similarity search fails, log and proceed to web scraping
+            logger.warning(f"Error during FAQ similarity search: {str(e)}. Proceeding to web scraping if location detected.")
+        
+        # TIER 3: Scrape website for location (if location detected and FAQ doesn't have answer)
+        if location_name:
+            logger.info(f"Tier 3: Attempting to scrape website for location '{location_name}'...")
+            try:
+                scraped_answer = await self.web_scraper.scrape_and_extract_answer(location_name, question)
+                if scraped_answer:
+                    logger.info(f"Successfully scraped content for location '{location_name}'")
+                    return scraped_answer
+                else:
+                    logger.warning(f"Could not scrape content for location '{location_name}'")
+            except Exception as e:
+                logger.warning(f"Error scraping website for location '{location_name}': {str(e)}")
+        
+        # If all tiers fail, return default response
+        logger.info("All tiers exhausted, returning default response")
+        return DEFAULT_RESPONSE
 
 
 # Global retriever instance (initialized lazily)
