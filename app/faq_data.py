@@ -4,6 +4,13 @@ Contains a list of question-answer pairs for the chatbot.
 """
 from typing import List, Dict
 
+"""
+q: are u a parent or owner
+
+"""
+
+
+
 
 # FAQ data structure: List of dictionaries with 'question' and 'answer' keys
 FAQ_DATA: List[Dict[str, str]] = [

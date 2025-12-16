@@ -316,48 +316,6 @@ Render will automatically check the `/health` endpoint. Make sure it's accessibl
 curl https://your-service-name.onrender.com/health
 ```
 
-## Azure App Service Deployment (F1 Free Tier)
-
-### Prerequisites
-
-1. Azure account (free tier available)
-2. GitHub repository with code
-
-### Quick Start
-
-1. **Create Azure Resources:**
-   - Follow the detailed guide in [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md)
-   - Or use Azure Portal to create App Service Plan (F1 Free) and Web App
-
-2. **Configure Application Settings:**
-   - Set `APP_ENV=production`
-   - Set `PYTHONUNBUFFERED=1`
-   - Add memory optimization variables (see AZURE_DEPLOYMENT.md)
-
-3. **Set Startup Command:**
-   - In Azure Portal → Configuration → General settings
-   - Set **Startup Command** to: `startup.sh`
-
-4. **Deploy:**
-   - **Option A:** Use GitHub Actions (automated) - see `.github/workflows/azure-deploy.yml`
-   - **Option B:** Use Azure CLI: `az webapp up --name your-app-name --resource-group your-rg`
-   - **Option C:** Use VS Code Azure extension
-
-### Important Notes for Azure F1 Free Tier
-
-- **Memory:** 1 GB RAM (better than Render's 512MB)
-- **No Always On:** Service may spin down after 20 minutes of inactivity
-- **Cold Start:** First request after spin-down may take 30-60 seconds
-- **Startup Script:** Uses `startup.sh` for optimized memory usage
-
-### Detailed Instructions
-
-See [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md) for complete step-by-step guide including:
-- Creating Azure resources
-- Configuring environment variables
-- Setting up GitHub Actions
-- Troubleshooting tips
-
 ## Environment Variables
 
 The application supports two environments: **stage** and **production**. Configuration is managed through environment files and environment variables.
