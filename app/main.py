@@ -85,7 +85,7 @@ async def root() -> WelcomeResponse:
     """
     env_info = f" (Environment: {settings.app_env.upper()})" if settings.debug else ""
     return WelcomeResponse(
-        message=f"Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?"
+        message=f"Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['Parent/Guardian', 'Existing Franchise Owner']"
     )
 
 
