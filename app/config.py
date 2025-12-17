@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     
     # Web scraping settings
     scrape_base_url: str = ""  # Base URL for web scraping (e.g., "https://example.com")
-    scrape_url_pattern: str = "{base_url}/locations/{location}"  # URL pattern for scraping (use {base_url}, {location}, {location_name}, {location-slug})
+    scrape_url_pattern: str = "{base_url}/{location-slug}"  # URL pattern for scraping (use {base_url}, {location}, {location_name}, {location-slug})
     
     model_config = SettingsConfigDict(
         env_file=".env",

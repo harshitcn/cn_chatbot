@@ -23,19 +23,19 @@ class FAQRetriever:
     Supports both static FAQ data and location-based data.
     """
     
-    def __init__(self, top_k: int = 1, similarity_threshold: float = 1.5):
+    def __init__(self, top_k: int = 1, similarity_threshold: float = 1.2):
         """
         Initialize the FAQ retriever.
         
         Args:
             top_k: Number of top results to return (default: 1 for best match)
-            similarity_threshold: Maximum distance threshold for relevant answers (default: 1.5)
+            similarity_threshold: Maximum distance threshold for relevant answers (default: 1.2)
                                  Answers with distance > threshold will return default response
                                  For normalized embeddings with L2 distance:
-                                 - 0.0-0.8: Very similar
-                                 - 0.8-1.2: Similar
-                                 - 1.2-1.5: Somewhat related
-                                 - >1.5: Poor match, return default
+                                 - 0.0-0.8: Very similar (excellent match)
+                                 - 0.8-1.0: Similar (good match)
+                                 - 1.0-1.2: Somewhat related (acceptable match)
+                                 - >1.2: Poor match, reject and try web scraping
         """
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
@@ -248,7 +248,7 @@ class FAQRetriever:
         
         return None
     
-    async def get_answer(self, question: str) -> str:
+    async def get_answer(self, question: str, location_slug: Optional[str] = None) -> str:
         """
         Get answer to a user question using improved multi-tier approach:
         1. Check predefined Q&A (exact/precise matching) - only return if it's a string answer (not menu/list)
@@ -258,6 +258,7 @@ class FAQRetriever:
         
         Args:
             question: User's question string
+            location_slug: Optional location slug for location-specific queries
         
         Returns:
             str: Best matching answer from predefined Q&A, FAQ data, or scraped content
@@ -307,16 +308,32 @@ class FAQRetriever:
         if not self.vector_store:
             self._initialize_vector_store()
         
-        # Detect location in the question
-        location_name = self.location_detector.extract_location(question)
+        # Use location_slug if provided, otherwise detect location in the question
+        location_name = None
+        use_slug_directly = False
+        if location_slug:
+            location_name = location_slug
+            use_slug_directly = True
+            logger.info(f"Using provided location_slug: '{location_slug}'")
+        else:
+            location_name = self.location_detector.extract_location(question)
+            if location_name:
+                logger.info(f"Location detected from question: '{location_name}'")
+        
         vector_store = self.vector_store
         
-        # If location is detected, fetch location data and merge with static data
+        # If location is detected or provided, fetch location data and merge with static data
         if location_name:
             try:
-                logger.info(f"Location detected: '{location_name}' in question: '{question[:100]}'")
-                # Pass the full question to the API for better context
-                location_data = await self.location_api_client.get_location_info(location_name, question)
+                if use_slug_directly:
+                    # Use slug directly to get location data
+                    logger.info(f"Fetching location data using slug: '{location_slug}'")
+                    location_data = await self.location_api_client.get_location_data(location_slug, question)
+                else:
+                    # Get slug from location name first, then get data
+                    logger.info(f"Location detected: '{location_name}' in question: '{question[:100]}'")
+                    location_data = await self.location_api_client.get_location_info(location_name, question)
+                
                 if location_data:
                     logger.info(f"Successfully fetched location data for '{location_name}'")
                     # Convert location data to FAQ format
@@ -406,35 +423,62 @@ class FAQRetriever:
                             best_score = score
                             logger.info(f"Updated best match: {result.page_content[:100]} (score: {score:.4f}, overlap: {keyword_overlap_ratio:.2%})")
                 
-                # Determine if the match is relevant
-                # For normalized embeddings with L2 distance, scores > 1.5 indicate poor matches
-                # We'll be permissive and only reject very poor matches
-                is_relevant = best_score <= self.similarity_threshold
+                # Calculate keyword overlap for the best match to ensure authenticity
+                best_result_question = best_result.page_content.lower()
+                best_result_words = set(best_result_question.split())
+                best_result_keywords = best_result_words - stop_words
+                best_common_keywords = user_keywords.intersection(best_result_keywords)
+                best_keyword_overlap = len(best_common_keywords) / len(user_keywords) if user_keywords else 0
+                
+                # Determine if the match is relevant - stricter criteria
+                # Require BOTH good semantic score AND meaningful keyword overlap
+                # For normalized embeddings with L2 distance:
+                # - Scores <= 1.0: Very good semantic match
+                # - Scores <= 1.2: Good semantic match (threshold)
+                # - Scores > 1.2: Poor semantic match, reject
+                
+                # Stricter relevance check:
+                # 1. Semantic score must be within threshold
+                # 2. Must have at least 40% keyword overlap OR at least 3 common keywords
+                # 3. If location_slug provided, be even stricter (require 50% overlap or 4 keywords)
+                semantic_match = best_score <= self.similarity_threshold
+                keyword_match = (best_keyword_overlap >= 0.4 and len(best_common_keywords) >= 2) or len(best_common_keywords) >= 3
+                
+                # If location_slug is provided, require higher quality matches
+                if location_slug:
+                    keyword_match = (best_keyword_overlap >= 0.5 and len(best_common_keywords) >= 3) or len(best_common_keywords) >= 4
+                    logger.info(f"Location slug provided - using stricter matching criteria")
+                
+                is_relevant = semantic_match and keyword_match
                 
                 # Additional check: if we have multiple results and the top one is much better,
-                # it's likely relevant even if slightly above threshold
+                # consider it relevant only if it's a very good match
                 if not is_relevant and len(results_with_scores) > 1:
                     second_score = results_with_scores[1][1]
                     score_gap = second_score - best_score
-                    # If top result is significantly better (gap > 0.2), consider it relevant
-                    if score_gap > 0.2 and best_score < 1.8:
+                    # Only accept if it's a very good match (score < 1.0) and has good keyword overlap
+                    if score_gap > 0.3 and best_score < 1.0 and best_keyword_overlap >= 0.5:
                         is_relevant = True
-                        logger.info(f"Top result accepted due to significant gap: {score_gap:.4f}")
+                        logger.info(f"Top result accepted due to significant gap and good keyword match: {score_gap:.4f}, overlap: {best_keyword_overlap:.2%}")
                 
-                logger.info(f"Selected match - Score: {best_score:.4f}, Threshold: {self.similarity_threshold}, Relevant: {is_relevant}")
+                logger.info(f"Selected match - Score: {best_score:.4f}, Threshold: {self.similarity_threshold}")
+                logger.info(f"Keyword overlap: {best_keyword_overlap:.2%} ({len(best_common_keywords)} common keywords)")
+                logger.info(f"Semantic match: {semantic_match}, Keyword match: {keyword_match}, Relevant: {is_relevant}")
                 logger.info(f"Matched question: {best_result.page_content[:150]}")
                 
                 if is_relevant:
                     answer = best_result.metadata.get("answer", DEFAULT_RESPONSE)
                     # Additional check: if answer is empty or too short, return default
                     if answer and len(answer.strip()) > 10:
-                        logger.info(f"Found answer in FAQ list with score {best_score:.4f}")
+                        logger.info(f"Found answer in FAQ list with score {best_score:.4f} and {best_keyword_overlap:.2%} keyword overlap")
                         return answer
                     else:
                         logger.info(f"Answer found but too short or empty, proceeding to web scraping. Score: {best_score}")
                 else:
-                    # Score is too high, meaning low similarity
-                    logger.info(f"No relevant answer in FAQ. Best match score: {best_score:.4f} exceeds threshold: {self.similarity_threshold}")
+                    # Score is too high or keyword overlap too low, meaning poor match
+                    logger.info(f"No relevant answer in FAQ. Best match score: {best_score:.4f}, keyword overlap: {best_keyword_overlap:.2%}")
+                    if location_slug:
+                        logger.info(f"Location slug provided - prioritizing web scraping over poor FAQ match")
             else:
                 # No results found
                 logger.info("No results found in FAQ list")
@@ -444,10 +488,16 @@ class FAQRetriever:
             logger.warning(f"Error during FAQ similarity search: {str(e)}. Proceeding to web scraping.")
         
         # TIER 3: Scrape website for general queries (not just locations)
-        # Try location-based scraping first if location detected
+        # Prioritize location-based scraping if location_slug is provided or location detected
         if location_name:
-            logger.info(f"Tier 3a: Attempting to scrape website for location '{location_name}'...")
+            # If location_slug was provided, prioritize scraping for that location
+            if use_slug_directly:
+                logger.info(f"Tier 3a: Attempting to scrape website for location slug '{location_slug}' (priority)...")
+            else:
+                logger.info(f"Tier 3a: Attempting to scrape website for location '{location_name}'...")
+            
             try:
+                # Use the location name/slug for scraping
                 scraped_answer = await self.web_scraper.scrape_and_extract_answer(location_name, question)
                 if scraped_answer:
                     logger.info(f"Successfully scraped content for location '{location_name}'")
@@ -457,7 +507,7 @@ class FAQRetriever:
             except Exception as e:
                 logger.warning(f"Error scraping website for location '{location_name}': {str(e)}, trying general scraping...")
         
-        # Try general web scraping for any query
+        # Try general web scraping for any query (only if location scraping failed or no location)
         logger.info("Tier 3b: Attempting general web scraping...")
         try:
             # Try to scrape based on the question itself

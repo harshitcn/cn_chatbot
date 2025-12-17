@@ -3,6 +3,7 @@ Web scraping utility for location-based queries.
 Scrapes website content when FAQ data doesn't contain the answer.
 """
 import logging
+import re
 from typing import Optional, Dict, Any
 import httpx
 from bs4 import BeautifulSoup
@@ -51,8 +52,14 @@ class WebScraper:
         # Normalize location name for URL (lowercase, replace spaces with hyphens)
         location_slug = location_name.lower().replace(' ', '-').replace(',', '')
         
+        # Remove "cn-" prefix if present (e.g., "cn-tx-alamo-ranch" -> "tx-alamo-ranch")
+        if location_slug.startswith('cn-'):
+            location_slug = location_slug[3:]  # Remove "cn-" prefix
+            logger.info(f"Removed 'cn-' prefix from location slug: '{location_name}' -> '{location_slug}'")
+        
         # Get URL pattern from settings or use default
-        url_pattern = getattr(self.settings, 'scrape_url_pattern', '{base_url}/locations/{location}')
+        # Default pattern: {base_url}/{location-slug} (e.g., https://codeninjas-39646145.hs-sites.com/tx-alamo-ranch)
+        url_pattern = getattr(self.settings, 'scrape_url_pattern', '{base_url}/{location-slug}')
         
         # Replace placeholders
         url = url_pattern.replace('{base_url}', self.base_url.rstrip('/'))
@@ -98,28 +105,77 @@ class WebScraper:
             # Parse HTML content
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Remove script and style elements
-            for script in soup(["script", "style", "nav", "footer", "header"]):
-                script.decompose()
+            # Remove unwanted elements (scripts, styles, navigation, forms, buttons, etc.)
+            unwanted_tags = ["script", "style", "nav", "footer", "header", "form", "button", 
+                           "input", "select", "textarea", "noscript", "iframe", "svg"]
+            for tag in unwanted_tags:
+                for element in soup.find_all(tag):
+                    element.decompose()
             
-            # Extract text content
-            # Try to find main content area first
-            main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=lambda x: x and ('content' in x.lower() or 'main' in x.lower()))
+            # Remove elements with common UI classes/IDs
+            unwanted_selectors = [
+                'nav', 'navigation', 'menu', 'sidebar', 'footer', 'header',
+                'form', 'button', 'modal', 'popup', 'cookie', 'consent',
+                'social', 'share', 'search', 'filter', 'pagination'
+            ]
+            for selector in unwanted_selectors:
+                for element in soup.find_all(class_=lambda x: x and selector in str(x).lower()):
+                    element.decompose()
+                for element in soup.find_all(id=lambda x: x and selector in str(x).lower()):
+                    element.decompose()
+            
+            # Extract text content from main content areas
+            main_content = (soup.find('main') or 
+                          soup.find('article') or 
+                          soup.find('div', class_=lambda x: x and any(keyword in str(x).lower() 
+                                                                      for keyword in ['content', 'main', 'body', 'page'])))
             
             if main_content:
                 text = main_content.get_text(separator=' ', strip=True)
             else:
-                # Fallback to body text
-                text = soup.get_text(separator=' ', strip=True)
+                # Fallback to body, but remove more unwanted elements
+                body = soup.find('body')
+                if body:
+                    # Remove common UI elements from body
+                    for element in body.find_all(['div', 'section'], class_=lambda x: x and any(
+                        keyword in str(x).lower() for keyword in ['nav', 'menu', 'footer', 'header', 'form', 'modal']
+                    )):
+                        element.decompose()
+                    text = body.get_text(separator=' ', strip=True)
+                else:
+                    text = soup.get_text(separator=' ', strip=True)
             
-            # Clean up text
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = ' '.join(chunk for chunk in chunks if chunk)
+            # Clean up text - remove excessive whitespace and common UI text
+            lines = []
+            skip_patterns = [
+                'field is required', 'required', 'submit', 'click', 'close', 'icon',
+                'find location', 'change location', 'locations near you', 'enroll now',
+                'learn more', 'request info', 'send question', 'your information',
+                'first name', 'last name', 'email', 'phone number', 'agree to',
+                'terms and conditions', 'privacy policy', 'cookie', 'follow us',
+                'social', 'share', 'back to site', 'thanks!', 'got any questions'
+            ]
             
-            # Limit text length to avoid token limits (keep first 3000 characters)
-            if len(text) > 3000:
-                text = text[:3000] + "..."
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or len(line) < 3:
+                    continue
+                # Skip lines that are clearly UI elements
+                if any(pattern in line.lower() for pattern in skip_patterns):
+                    continue
+                # Skip lines that are all caps and short (likely UI labels)
+                if line.isupper() and len(line) < 50:
+                    continue
+                lines.append(line)
+            
+            # Join lines and clean up
+            text = ' '.join(lines)
+            # Remove multiple spaces
+            text = re.sub(r'\s+', ' ', text)
+            
+            # Limit text length to avoid token limits (keep first 4000 characters)
+            if len(text) > 4000:
+                text = text[:4000] + "..."
             
             if text and len(text) > 50:  # Ensure we have meaningful content
                 logger.info(f"Successfully scraped {len(text)} characters from {url}")
@@ -135,6 +191,64 @@ class WebScraper:
             logger.error(f"Error scraping '{url}': {str(e)}")
             return None
     
+    def _extract_relevant_content(self, content: str, question: str) -> str:
+        """
+        Extract and format content relevant to the user's question.
+        
+        Args:
+            content: Scraped content
+            question: User's question
+        
+        Returns:
+            str: Formatted, relevant content
+        """
+        question_lower = question.lower()
+        content_lower = content.lower()
+        
+        # Extract keywords from question
+        question_words = set(word for word in question_lower.split() if len(word) > 3)
+        
+        # Find relevant sections based on question type
+        relevant_sections = []
+        sentences = content.split('. ')
+        
+        for sentence in sentences:
+            sentence_lower = sentence.lower()
+            # Check if sentence contains question keywords or related terms
+            sentence_words = set(sentence_lower.split())
+            common_words = question_words & sentence_words
+            
+            # For program-related questions
+            if any(word in question_lower for word in ['program', 'offer', 'course', 'class', 'learn', 'teach']):
+                if any(word in sentence_lower for word in ['program', 'create', 'jr', 'camp', 'academy', 
+                                                          'ages', 'learn', 'coding', 'robotics', 'game', 
+                                                          'curriculum', 'ninja', 'sensei']):
+                    relevant_sections.append(sentence.strip())
+            
+            # For general questions, include sentences with keyword matches
+            elif len(common_words) >= 1:
+                relevant_sections.append(sentence.strip())
+        
+        # If we found relevant sections, use them; otherwise use the full content
+        if relevant_sections:
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_sections = []
+            for section in relevant_sections:
+                if section not in seen and len(section) > 20:
+                    seen.add(section)
+                    unique_sections.append(section)
+            
+            if unique_sections:
+                # Take top 5-8 most relevant sections
+                formatted_content = '. '.join(unique_sections[:8])
+                if not formatted_content.endswith('.'):
+                    formatted_content += '.'
+                return formatted_content
+        
+        # Fallback: return first meaningful part of content
+        return content[:1500] if len(content) > 1500 else content
+    
     async def scrape_and_extract_answer(self, location_name: str, question: str) -> Optional[str]:
         """
         Scrape website and extract relevant answer based on the question.
@@ -142,7 +256,7 @@ class WebScraper:
         Args:
             location_name: Name of the location
             question: User's question
-            
+        
         Returns:
             Optional[str]: Extracted answer or scraped content, None if scraping fails
         """
@@ -151,12 +265,42 @@ class WebScraper:
         if not scraped_content:
             return None
         
-        # If we have a specific question, try to find relevant sections
-        # For now, return the scraped content
-        # In the future, we could use NLP to extract more relevant sections
+        # Extract relevant content based on the question
+        relevant_content = self._extract_relevant_content(scraped_content, question)
         
-        # Format the response
-        answer = f"Based on information from our website about {location_name}: {scraped_content}"
+        # Format the response in a user-friendly way
+        # Remove location slug prefix for display
+        display_location = location_name.replace('cn-', '') if location_name.startswith('cn-') else location_name
+        display_location = display_location.replace('-', ' ').title()
+        
+        # Format based on question type
+        question_lower = question.lower()
+        
+        # For program-related questions, format as a structured list
+        if any(word in question_lower for word in ['program', 'offer', 'course', 'class', 'what do you']):
+            # Try to extract program names and descriptions
+            programs = []
+            content_lower = relevant_content.lower()
+            
+            # Look for program mentions
+            if 'create' in content_lower:
+                programs.append("CODE NINJAS CREATE - Our best-selling program for ages 8-14")
+            if 'jr' in content_lower or 'jr.' in content_lower:
+                programs.append("CODE NINJAS JR - Designed for ages 5-7, no reading required")
+            if 'camp' in content_lower:
+                programs.append("CODE NINJAS CAMPS - Fun learning adventures for ages 5-14")
+            if 'academy' in content_lower or 'academies' in content_lower:
+                programs.append("CODE NINJAS ACADEMIES - Multi-week modules in Robotics, AI and more")
+            
+            if programs:
+                answer = f"At Code Ninjas {display_location}, we offer the following programs:\n\n"
+                answer += "\n".join(f"• {program}" for program in programs)
+                answer += f"\n\n{relevant_content[:500]}"
+            else:
+                answer = f"At Code Ninjas {display_location}, we offer:\n\n{relevant_content}"
+        else:
+            # For other questions, use a simple format
+            answer = f"At Code Ninjas {display_location}:\n\n{relevant_content}"
         
         return answer
     

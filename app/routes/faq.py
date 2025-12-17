@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 async def get_faq_answer(request: FAQRequest) -> FAQResponse:
     """
     Endpoint to get FAQ answer for a user question.
-    Supports location-based queries by detecting location in the question.
+    Supports location-based queries by detecting location in the question or using location_slug parameter.
     
     Args:
-        request: FAQRequest containing the user's question
+        request: FAQRequest containing the user's question and optional location_slug
     
     Returns:
         FAQResponse: Contains the answer to the question
@@ -37,7 +37,7 @@ async def get_faq_answer(request: FAQRequest) -> FAQResponse:
             logger.warning("Retriever vector store not initialized, attempting to initialize...")
             retriever._initialize_vector_store()
         
-        answer = await retriever.get_answer(request.question)
+        answer = await retriever.get_answer(request.question, location_slug=request.location_slug)
         logger.info("FAQ request processed successfully")
         return FAQResponse(answer=answer)
         
