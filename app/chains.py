@@ -9,7 +9,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
 from app.faq_data import FAQ_DATA
-from app.predefined_qa import get_predefined_answer
+from app.predefined_qa import get_predefined_answer, normalize_question
 from app.utils.embeddings import load_or_build_faiss_index, get_embeddings
 from app.utils.location_detector import LocationDetector
 from app.utils.location_api import LocationAPIClient
@@ -226,6 +226,19 @@ class FAQRetriever:
         
         # TIER 1: Check predefined Q&A first (exact/precise matching)
         logger.info("Tier 1: Checking predefined Q&A...")
+        
+        # Special handling for "Something else/just browsing" - ask user what they're looking for
+        # Use the same normalization as predefined_qa for consistent matching
+        normalized_question = normalize_question(question)
+        browsing_normalized = normalize_question("Something else/just browsing")
+        
+        # Check if the normalized question matches the browsing option
+        # Also check if it contains key words in case of slight variations
+        if (normalized_question == browsing_normalized or 
+            ("something" in normalized_question and "else" in normalized_question and "browsing" in normalized_question)):
+            logger.info("User selected 'Something else/just browsing', prompting for more details")
+            return "Please tell us what you are looking for"
+        
         predefined_answer = get_predefined_answer(question)
         if predefined_answer:
             logger.info("Found answer in predefined Q&A")
