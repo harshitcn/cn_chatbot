@@ -38,6 +38,14 @@ FAQ_DATA: List[Dict[str, str]] = [
         "question": "What kind of support does Code Ninjas provide?",
         "answer": "Support includes: Training (owners + staff), Curriculum delivery, Marketing launch assistance, Technology setup (Dojo, M365, MyStudio, etc.), Ongoing operations coaching, Software, branding, and compliance management. The structured cross-departmental process is reflected in items shown in the Closure Process Manual (Tech, Marketing, HO, Legal, etc.)."
     },
+    {
+        "question": "How do I raise a support issue?",
+        "answer": "To raise a support issue, please contact your Franchise Business Partner (FBP) or reach out to the Code Ninjas support team. You can submit a support ticket through the franchise portal, email the support team directly, or call the support hotline. For urgent issues, please contact your FBP immediately. The support team will assist you with technical issues, operational questions, system access problems, and other concerns related to your franchise operations."
+    },
+    {
+        "question": "I want to raise a support issue",
+        "answer": "To raise a support issue, please contact your Franchise Business Partner (FBP) or reach out to the Code Ninjas support team. You can submit a support ticket through the franchise portal, email the support team directly, or call the support hotline. For urgent issues, please contact your FBP immediately. The support team will assist you with technical issues, operational questions, system access problems, and other concerns related to your franchise operations."
+    },
     # {
     #     "question": "What Code Ninjas centers are currently for sale?",
     #     "answer": "Center resale opportunities vary by region and availability. Franchise Development can provide the current list of active resale markets after you submit a franchise inquiry."

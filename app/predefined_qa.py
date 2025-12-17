@@ -51,6 +51,14 @@ PREDEFINED_QA: List[Dict[str, str]] = [
             'Go back to Main Menu'
         ]
 
+    },
+    {
+        "question": "I want to raise a support issue",
+        "answer": "To raise a support issue, please contact your Franchise Business Partner (FBP) or reach out to the Code Ninjas support team. You can submit a support ticket through the franchise portal, email the support team directly, or call the support hotline. For urgent issues, please contact your FBP immediately. The support team will assist you with technical issues, operational questions, system access problems, and other concerns related to your franchise operations."
+    },
+    {
+        "question": "I have another concern",
+        "answer": "Please tell us what you are looking for or describe your concern, and we'll do our best to help you."
     }
 ]
 

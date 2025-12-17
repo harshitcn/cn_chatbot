@@ -159,4 +159,103 @@ class WebScraper:
         answer = f"Based on information from our website about {location_name}: {scraped_content}"
         
         return answer
+    
+    async def scrape_general_query(self, question: str) -> Optional[str]:
+        """
+        Scrape website for general queries (not location-specific).
+        Attempts to find relevant information based on the question.
+        
+        Args:
+            question: User's question
+        
+        Returns:
+            Optional[str]: Extracted answer or scraped content, None if scraping fails
+        """
+        if not self.base_url:
+            logger.warning("Web scraping not configured (base_url not set)")
+            return None
+        
+        # Try to construct a search URL or use base URL with search
+        # This is a generic implementation - can be customized based on website structure
+        try:
+            # Option 1: Try base URL with search path
+            search_urls = [
+                f"{self.base_url.rstrip('/')}/search?q={question.replace(' ', '+')}",
+                f"{self.base_url.rstrip('/')}/faq",
+                f"{self.base_url.rstrip('/')}/support",
+                self.base_url.rstrip('/')  # Fallback to base URL
+            ]
+            
+            for url in search_urls:
+                try:
+                    logger.info(f"Attempting to scrape: {url}")
+                    
+                    headers = {
+                        "User-Agent": self.user_agent,
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5",
+                    }
+                    
+                    async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+                        response = await client.get(url, headers=headers)
+                        response.raise_for_status()
+                    
+                    # Parse HTML content
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Remove script and style elements
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.decompose()
+                    
+                    # Extract text content
+                    main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=lambda x: x and ('content' in x.lower() or 'main' in x.lower() or 'faq' in x.lower()))
+                    
+                    if main_content:
+                        text = main_content.get_text(separator=' ', strip=True)
+                    else:
+                        text = soup.get_text(separator=' ', strip=True)
+                    
+                    # Clean up text
+                    lines = (line.strip() for line in text.splitlines())
+                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                    text = ' '.join(chunk for chunk in chunks if chunk)
+                    
+                    # Try to find relevant sections based on question keywords
+                    question_lower = question.lower()
+                    question_words = set(question_lower.split())
+                    
+                    # Look for paragraphs or sections that contain question keywords
+                    relevant_sections = []
+                    for tag in soup.find_all(['p', 'div', 'section', 'article']):
+                        tag_text = tag.get_text(separator=' ', strip=True).lower()
+                        if tag_text and len(tag_text) > 20:  # Meaningful content
+                            tag_words = set(tag_text.split())
+                            common_words = question_words & tag_words
+                            if len(common_words) >= 2:  # At least 2 common words
+                                relevant_sections.append(tag.get_text(separator=' ', strip=True))
+                    
+                    # Use relevant sections if found, otherwise use full text
+                    if relevant_sections:
+                        text = ' '.join(relevant_sections[:3])  # Take top 3 relevant sections
+                    
+                    # Limit text length
+                    if len(text) > 2000:
+                        text = text[:2000] + "..."
+                    
+                    if text and len(text) > 50:
+                        logger.info(f"Successfully scraped {len(text)} characters from {url}")
+                        return f"Based on information from our website: {text}"
+                    
+                except httpx.HTTPError as e:
+                    logger.debug(f"HTTP error scraping '{url}': {str(e)}, trying next URL...")
+                    continue
+                except Exception as e:
+                    logger.debug(f"Error scraping '{url}': {str(e)}, trying next URL...")
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in general web scraping: {str(e)}")
+            return None
 

@@ -206,12 +206,55 @@ class FAQRetriever:
         
         return vector_store
     
+    def _exact_text_match_in_faq(self, question: str) -> Optional[str]:
+        """
+        Perform exact text matching in FAQ data before semantic search.
+        This helps catch queries that might not match well with semantic search.
+        
+        Args:
+            question: User's question string
+        
+        Returns:
+            Optional[str]: Answer if exact match found, None otherwise
+        """
+        logger = logging.getLogger(__name__)
+        normalized_question = normalize_question(question)
+        
+        for faq in FAQ_DATA:
+            faq_question = faq.get("question", "")
+            faq_answer = faq.get("answer", "")
+            
+            if not faq_question or not faq_answer:
+                continue
+            
+            # Normalize FAQ question for comparison
+            faq_normalized = normalize_question(faq_question)
+            
+            # Check for exact match
+            if normalized_question == faq_normalized:
+                logger.info(f"Exact text match found in FAQ: {faq_question[:100]}")
+                return faq_answer
+            
+            # Check if user question is contained in FAQ question or vice versa
+            if normalized_question in faq_normalized or faq_normalized in normalized_question:
+                # Additional check: ensure significant overlap (at least 70% of shorter string)
+                shorter_len = min(len(normalized_question.split()), len(faq_normalized.split()))
+                if shorter_len > 0:
+                    common_words = set(normalized_question.split()) & set(faq_normalized.split())
+                    overlap_ratio = len(common_words) / shorter_len
+                    if overlap_ratio >= 0.7:
+                        logger.info(f"High overlap text match found in FAQ: {faq_question[:100]} (overlap: {overlap_ratio:.2%})")
+                        return faq_answer
+        
+        return None
+    
     async def get_answer(self, question: str) -> str:
         """
-        Get answer to a user question using three-tier approach:
-        1. Check predefined Q&A (exact/precise matching)
-        2. Check FAQ list (semantic search)
-        3. Scrape website for location (if location detected and FAQ doesn't have answer)
+        Get answer to a user question using improved multi-tier approach:
+        1. Check predefined Q&A (exact/precise matching) - only return if it's a string answer (not menu/list)
+        2. Check FAQ list with exact text matching first
+        3. Check FAQ list with semantic search
+        4. Scrape website for general queries (not just locations)
         
         Args:
             question: User's question string
@@ -242,10 +285,25 @@ class FAQRetriever:
         predefined_answer = get_predefined_answer(question)
         if predefined_answer:
             logger.info("Found answer in predefined Q&A")
+            # Convert list to JSON string format if needed (for menu options)
+            if isinstance(predefined_answer, list):
+                import json
+                logger.info("Predefined Q&A returned menu options")
+                return json.dumps(predefined_answer)
+            # Return string answer directly
             return predefined_answer
+        
         logger.info("No match found in predefined Q&A, proceeding to FAQ search...")
         
-        # TIER 2: Check FAQ list (semantic search)
+        # TIER 2a: Check FAQ list with exact text matching first
+        logger.info("Tier 2a: Checking FAQ list with exact text matching...")
+        exact_match_answer = self._exact_text_match_in_faq(question)
+        if exact_match_answer:
+            logger.info("Found answer via exact text matching in FAQ")
+            return exact_match_answer
+        
+        # TIER 2b: Check FAQ list (semantic search)
+        logger.info("Tier 2b: Checking FAQ list with semantic search...")
         if not self.vector_store:
             self._initialize_vector_store()
         
@@ -383,20 +441,35 @@ class FAQRetriever:
                 
         except Exception as e:
             # If similarity search fails, log and proceed to web scraping
-            logger.warning(f"Error during FAQ similarity search: {str(e)}. Proceeding to web scraping if location detected.")
+            logger.warning(f"Error during FAQ similarity search: {str(e)}. Proceeding to web scraping.")
         
-        # TIER 3: Scrape website for location (if location detected and FAQ doesn't have answer)
+        # TIER 3: Scrape website for general queries (not just locations)
+        # Try location-based scraping first if location detected
         if location_name:
-            logger.info(f"Tier 3: Attempting to scrape website for location '{location_name}'...")
+            logger.info(f"Tier 3a: Attempting to scrape website for location '{location_name}'...")
             try:
                 scraped_answer = await self.web_scraper.scrape_and_extract_answer(location_name, question)
                 if scraped_answer:
                     logger.info(f"Successfully scraped content for location '{location_name}'")
                     return scraped_answer
                 else:
-                    logger.warning(f"Could not scrape content for location '{location_name}'")
+                    logger.warning(f"Could not scrape content for location '{location_name}', trying general scraping...")
             except Exception as e:
-                logger.warning(f"Error scraping website for location '{location_name}': {str(e)}")
+                logger.warning(f"Error scraping website for location '{location_name}': {str(e)}, trying general scraping...")
+        
+        # Try general web scraping for any query
+        logger.info("Tier 3b: Attempting general web scraping...")
+        try:
+            # Try to scrape based on the question itself
+            # Extract key terms from the question for searching
+            scraped_answer = await self.web_scraper.scrape_general_query(question)
+            if scraped_answer:
+                logger.info("Successfully scraped content from general query")
+                return scraped_answer
+            else:
+                logger.warning("Could not scrape content from general query")
+        except Exception as e:
+            logger.warning(f"Error during general web scraping: {str(e)}")
         
         # If all tiers fail, return default response
         logger.info("All tiers exhausted, returning default response")
