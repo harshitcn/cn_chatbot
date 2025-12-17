@@ -21,7 +21,9 @@ class WebScraper:
     def __init__(self):
         """Initialize the web scraper with settings."""
         self.settings = get_settings()
-        self.base_url = getattr(self.settings, 'scrape_base_url', None)
+        base_url = getattr(self.settings, 'scrape_base_url', None)
+        # Strip whitespace and newlines from base_url
+        self.base_url = base_url.strip() if base_url else None
         self.timeout = 15.0  # 15 seconds timeout for web requests
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     
@@ -61,11 +63,17 @@ class WebScraper:
         # Default pattern: {base_url}/{location-slug} (e.g., https://codeninjas-39646145.hs-sites.com/tx-alamo-ranch)
         url_pattern = getattr(self.settings, 'scrape_url_pattern', '{base_url}/{location-slug}')
         
+        # Ensure base_url is clean (no trailing slashes, whitespace, or newlines)
+        clean_base_url = self.base_url.rstrip('/').rstrip()
+        
         # Replace placeholders
-        url = url_pattern.replace('{base_url}', self.base_url.rstrip('/'))
+        url = url_pattern.replace('{base_url}', clean_base_url)
         url = url.replace('{location}', location_slug)
         url = url.replace('{location_name}', location_name.replace(' ', '-'))
         url = url.replace('{location-slug}', location_slug)
+        
+        # Final cleanup - remove any whitespace or newlines
+        url = url.strip()
         
         return url
     
@@ -323,11 +331,13 @@ class WebScraper:
         # This is a generic implementation - can be customized based on website structure
         try:
             # Option 1: Try base URL with search path
+            # Ensure base_url is clean (no trailing slashes, whitespace, or newlines)
+            clean_base_url = self.base_url.rstrip('/').rstrip()
             search_urls = [
-                f"{self.base_url.rstrip('/')}/search?q={question.replace(' ', '+')}",
-                f"{self.base_url.rstrip('/')}/faq",
-                f"{self.base_url.rstrip('/')}/support",
-                self.base_url.rstrip('/')  # Fallback to base URL
+                f"{clean_base_url}/search?q={question.replace(' ', '+')}",
+                f"{clean_base_url}/faq",
+                f"{clean_base_url}/support",
+                clean_base_url  # Fallback to base URL
             ]
             
             for url in search_urls:
