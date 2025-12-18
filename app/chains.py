@@ -23,7 +23,7 @@ root_dir = Path(__file__).parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from chatbot import StructuredChatbot
+from chatbot import DynamicChatbot
 
 
 class FAQRetriever:
@@ -52,83 +52,38 @@ class FAQRetriever:
         self.vector_store: Optional[FAISS] = None
         self.location_detector = LocationDetector()
         self.location_api_client = LocationAPIClient()
-        self.structured_chatbot: Optional[StructuredChatbot] = None
+        self.dynamic_chatbot: Optional[DynamicChatbot] = None
         self._initialize_vector_store()
     
-    def _format_structured_answer(self, answer_data: Dict[str, Any]) -> str:
+    def _format_dynamic_answer(self, response: Dict[str, Any]) -> str:
         """
-        Format structured answer data into a readable string.
+        Format dynamic answer response into a readable string.
         
         Args:
-            answer_data: Structured answer dictionary
+            response: Response dictionary from DynamicChatbot
             
         Returns:
             str: Formatted answer text
         """
-        if not answer_data:
-            return "I couldn't find relevant information."
+        if not response or response.get("status") != "success":
+            answer = response.get("answer", "I couldn't find relevant information.")
+            return answer
         
-        category = answer_data.get("category", "general")
-        location = answer_data.get("location", "")
-        overview = answer_data.get("overview", {})
-        highlights = answer_data.get("highlights", [])
-        items = answer_data.get("items", [])
+        answer = response.get("answer", "")
+        sources = response.get("sources", [])
+        location = response.get("location", "")
         
-        # Build answer
+        # Build formatted answer
         answer_parts = []
         
-        # Add category header
-        if category == "camps":
-            answer_parts.append("**CAMPS**")
-        elif category == "programs":
-            answer_parts.append("**PROGRAMS**")
-        elif category == "additional_programs":
-            answer_parts.append("**ADDITIONAL PROGRAMS**")
-        
         if location:
-            answer_parts.append(f"Location: {location}")
+            answer_parts.append(f"Location: {location}\n")
         
-        # Add overview
-        if overview.get("headline"):
-            answer_parts.append(f"\n{overview['headline']}")
+        answer_parts.append(answer)
         
-        if overview.get("summary"):
-            answer_parts.append(f"\n{overview['summary']}")
-        
-        if overview.get("age_range"):
-            answer_parts.append(f"Age Range: {overview['age_range']}")
-        
-        # Add highlights
-        if highlights:
-            answer_parts.append("\n**Highlights:**")
-            for highlight in highlights:
-                answer_parts.append(f"• {highlight}")
-        
-        # Add items
-        if items:
-            category_label = "CAMPS" if category == "camps" else "PROGRAMS" if category == "programs" else "ADDITIONAL PROGRAMS" if category == "additional_programs" else "OPTIONS"
-            answer_parts.append(f"\n**Available {category_label}:**")
-            for item in items:
-                item_parts = []
-                if item.get("name"):
-                    item_parts.append(f"**{item['name']}**")
-                if item.get("age_range"):
-                    item_parts.append(f"(Ages {item['age_range']})")
-                if item.get("price"):
-                    item_parts.append(f"- {item['price']}")
-                if item.get("duration"):
-                    item_parts.append(f"\n  Dates: {item['duration']}")
-                if item.get("schedule"):
-                    item_parts.append(f"\n  Time: {item['schedule']}")
-                if item.get("description"):
-                    desc = item['description']
-                    # Limit description length
-                    if len(desc) > 300:
-                        desc = desc[:300] + "..."
-                    item_parts.append(f"\n  {desc}")
-                
-                if item_parts:
-                    answer_parts.append("\n" + " ".join(item_parts))
+        # Optionally add sources (for debugging/transparency)
+        if sources and len(sources) > 0:
+            answer_parts.append(f"\n\n(Information from {len(sources)} source(s))")
         
         return "\n".join(answer_parts)
     
@@ -600,7 +555,7 @@ class FAQRetriever:
                 is_camp_query = 'camp' in question_lower
                 
                 # Use the new structured chatbot system for scraping
-                if self.structured_chatbot is None:
+                if self.dynamic_chatbot is None:
                     # Initialize structured chatbot (lazy initialization)
                     from app.config import get_settings
                     settings = get_settings()
@@ -609,22 +564,21 @@ class FAQRetriever:
                         # Construct URL from location
                         location_slug_clean = location_to_use.replace('cn-', '') if location_to_use.startswith('cn-') else location_to_use
                         url = f"{base_url.rstrip('/')}/{location_slug_clean}/"
-                        self.structured_chatbot = StructuredChatbot(base_url=url, use_cache=True)
+                        self.dynamic_chatbot = DynamicChatbot(base_url=url, use_cache=True)
                     else:
                         logger.warning("scrape_base_url not configured, cannot use structured scraper")
                 
-                if self.structured_chatbot:
+                if self.dynamic_chatbot:
                     # Run synchronous answer_query in executor to avoid blocking
                     loop = asyncio.get_event_loop()
                     response = await loop.run_in_executor(
                         None,
-                        lambda: self.structured_chatbot.answer_query(question, location=location_to_use)
+                        lambda: self.dynamic_chatbot.answer_query(question, location=location_to_use)
                     )
                     
                     if response.get('status') == 'success' and response.get('answer'):
-                        answer_data = response.get('answer', {})
-                        # Format the structured answer into a readable string
-                        formatted_answer = self._format_structured_answer(answer_data)
+                        # Format the dynamic answer into a readable string
+                        formatted_answer = self._format_dynamic_answer(response)
                         logger.info(f"Successfully got answer from structured scraper for location '{location_to_use}'")
                         return formatted_answer
                     else:
@@ -640,24 +594,23 @@ class FAQRetriever:
         logger.info("Tier 3b: Attempting general web scraping...")
         try:
             # Initialize structured chatbot with base URL if not already initialized
-            if self.structured_chatbot is None:
+            if self.dynamic_chatbot is None:
                 from app.config import get_settings
                 settings = get_settings()
                 base_url = getattr(settings, 'scrape_base_url', None)
                 if base_url:
-                    self.structured_chatbot = StructuredChatbot(base_url=base_url, use_cache=True)
+                    self.dynamic_chatbot = DynamicChatbot(base_url=base_url, use_cache=True)
             
-            if self.structured_chatbot:
+            if self.dynamic_chatbot:
                 # Run synchronous answer_query in executor
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None,
-                    lambda: self.structured_chatbot.answer_query(question)
+                    lambda: self.dynamic_chatbot.answer_query(question)
                 )
                 
                 if response.get('status') == 'success' and response.get('answer'):
-                    answer_data = response.get('answer', {})
-                    formatted_answer = self._format_structured_answer(answer_data)
+                    formatted_answer = self._format_dynamic_answer(response)
                     logger.info("Successfully scraped content from general query")
                     return formatted_answer
                 else:
@@ -674,25 +627,24 @@ class FAQRetriever:
             location_for_scraping = location_slug if location_slug else location_name
             
             # Initialize with location-specific URL if location available
-            if location_for_scraping and self.structured_chatbot is None:
+            if location_for_scraping and self.dynamic_chatbot is None:
                 from app.config import get_settings
                 settings = get_settings()
                 base_url = getattr(settings, 'scrape_base_url', None)
                 if base_url:
                     location_slug_clean = location_for_scraping.replace('cn-', '') if location_for_scraping.startswith('cn-') else location_for_scraping
                     url = f"{base_url.rstrip('/')}/{location_slug_clean}/"
-                    self.structured_chatbot = StructuredChatbot(base_url=url, use_cache=True)
+                    self.dynamic_chatbot = DynamicChatbot(base_url=url, use_cache=True)
             
-            if self.structured_chatbot:
+            if self.dynamic_chatbot:
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None,
-                    lambda: self.structured_chatbot.answer_query(question, location=location_for_scraping)
+                    lambda: self.dynamic_chatbot.answer_query(question, location=location_for_scraping)
                 )
                 
                 if response.get('status') == 'success' and response.get('answer'):
-                    answer_data = response.get('answer', {})
-                    formatted_answer = self._format_structured_answer(answer_data)
+                    formatted_answer = self._format_dynamic_answer(response)
                     logger.info("Successfully got answer from structured scraper")
                     return formatted_answer
                 else:

@@ -1,20 +1,24 @@
 """
-Structured web scraper for HubSpot pages.
-Extracts camps, programs, and additional programs using actual DOM structure.
+Fully dynamic web scraper for HubSpot pages.
+Extracts ALL content as text chunks for semantic search - no hard-coded sections.
+Works for any query by extracting everything and using semantic search.
 """
 import logging
 import re
+import hashlib
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 import requests
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, Tag, NavigableString
 
 logger = logging.getLogger(__name__)
 
 
-class HubSpotScraper:
+class DynamicScraper:
     """
-    Structured scraper for HubSpot pages.
-    Uses actual DOM structure to extract camps, programs, and additional programs.
+    Fully dynamic scraper that extracts ALL content as chunks.
+    No hard-coded selectors or section-specific logic.
+    Works by extracting all text content and chunking it for semantic search.
     """
     
     def __init__(self, timeout: int = 15, user_agent: Optional[str] = None):
@@ -47,411 +51,355 @@ class HubSpotScraper:
         return BeautifulSoup(html, 'html.parser')
     
     def _remove_unwanted_elements(self, soup: BeautifulSoup) -> None:
-        """Remove unwanted elements: scripts, styles, nav, footer, header, testimonials."""
+        """
+        Remove only truly non-content elements.
+        Keep navigation, footer, buttons, etc. as they contain useful information.
+        """
+        # Remove only non-content elements
         unwanted_tags = [
-            "script", "style", "nav", "footer", "header", "form", "button",
-            "input", "select", "textarea", "noscript", "iframe", "svg",
+            "script", "style", "noscript", "iframe", "svg",
             "meta", "link", "base"
         ]
         for tag in unwanted_tags:
             for element in soup.find_all(tag):
                 element.decompose()
-        
-        # Remove testimonials section
-        for elem in soup.find_all(string=re.compile(r'testimonial|hear from parent', re.IGNORECASE)):
-            parent = elem.find_parent(['section', 'div', 'article'])
-            if parent:
-                parent.decompose()
-        
-        # Remove elements with testimonial classes
-        for elem in soup.find_all(class_=lambda x: x and 'testimonial' in str(x).lower()):
-            elem.decompose()
     
-    def _extract_text_content(self, element: Tag) -> str:
-        """Extract clean text content from an element."""
+    def _clean_text(self, text: str) -> str:
+        """Clean and normalize text."""
+        if not text:
+            return ""
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove control characters but keep punctuation
+        text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+        return text.strip()
+    
+    def _extract_text_from_element(self, element: Tag) -> str:
+        """Extract clean text from an element."""
         if not element:
             return ""
         text = element.get_text(separator=' ', strip=True)
-        text = re.sub(r'\s+', ' ', text)
-        return text.strip()
+        return self._clean_text(text)
     
-    def _extract_age_range(self, text: str) -> Optional[str]:
-        """Extract age range from text."""
-        patterns = [
-            r'ages?\s+(\d+)\s*(?:to|-|–|—)\s*(\d+)',  # Ages 5-12, Ages 5 to 12
-            r'ages?\s+(\d+)\+',  # Ages 8+
-            r'ages?\s+(\d+)',  # Ages 8
-            r'\((\d+)\+?\)',  # (8+)
-            r'\((\d+)\s*(?:to|-|–|—)\s*(\d+)\)',  # (5-7)
-            r'(\d+)\s*(?:to|-|–|—)\s*(\d+)\s*years?',  # 5-12 years
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                if match.lastindex == 2:
-                    return f"{match.group(1)}-{match.group(2)}"
-                else:
-                    return f"{match.group(1)}+" if '+' in match.group(0) else match.group(1)
-        return None
-    
-    def _extract_price(self, text: str) -> Optional[str]:
-        """Extract price from text."""
-        match = re.search(r'\$(\d+(?:,\d{3})*(?:\.\d{2})?)', text)
-        if match:
-            return f"${match.group(1)}"
-        return None
-    
-    def _extract_camps_from_camps_page(self, base_url: str) -> Dict[str, Any]:
-        """Extract camps from the /camps page."""
-        camps_url = f"{base_url.rstrip('/')}/camps"
-        html = self.fetch_html(camps_url)
-        if not html:
-            return {"overview": {}, "camps": []}
+    def _identify_section_name(self, element: Tag) -> str:
+        """
+        Dynamically identify section name from element context.
+        Looks for nearby headings, parent containers, or class names.
+        """
+        # First, look for a heading before this element (within reasonable distance)
+        for heading in element.find_all_previous(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'], limit=5):
+            heading_text = self._clean_text(heading.get_text())
+            if heading_text and 5 <= len(heading_text) <= 100:
+                return heading_text
         
-        soup = self.parse_html(html)
-        self._remove_unwanted_elements(soup)
+        # Look for parent container with meaningful class/id
+        parent = element.find_parent(['section', 'article', 'div', 'main', 'nav', 'footer', 'header'])
+        max_depth = 7
+        depth = 0
         
-        camps_data = {
-            "overview": {
-                "headline": None,
-                "age_range": None,
-                "summary": None
-            },
-            "camps": []
-        }
-        
-        # Find main camps section - look for heading "CAMPS"
-        main_section = None
-        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = self._extract_text_content(heading)
-            if 'camp' in heading_text.lower() and heading.name == 'h1':
-                # Found main camps heading
-                main_section = heading.find_parent(['section', 'article', 'div'])
-                if not main_section:
-                    main_section = heading.parent
-                
-                # Extract overview
-                camps_data["overview"]["headline"] = heading_text
-                
-                # Look for age range near heading
-                age_elem = heading.find_next(string=re.compile(r'ages?\s+\d+', re.IGNORECASE))
-                if age_elem:
-                    age_text = age_elem.strip() if isinstance(age_elem, str) else self._extract_text_content(age_elem.parent)
-                    age_range = self._extract_age_range(age_text)
-                    if age_range:
-                        camps_data["overview"]["age_range"] = age_range
-                
-                # Find summary paragraph
-                para = heading.find_next('p')
-                if para:
-                    summary = self._extract_text_content(para)
-                    if len(summary) > 50:
-                        camps_data["overview"]["summary"] = summary
-                        if not camps_data["overview"]["age_range"]:
-                            age_range = self._extract_age_range(summary)
-                            if age_range:
-                                camps_data["overview"]["age_range"] = age_range
-                break
-        
-        # Extract individual camp cards
-        # Look for section with "UPCOMING CAMPS FOR YOU" or camp cards
-        camps_section = None
-        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = self._extract_text_content(heading)
-            if 'upcoming' in heading_text.lower() or 'camps for you' in heading_text.lower():
-                # Find parent container
-                camps_section = heading.find_parent(['section', 'article', 'div'])
-                if not camps_section:
-                    # Look for next sibling container
-                    next_elem = heading.find_next(['section', 'article', 'div'])
-                    if next_elem:
-                        camps_section = next_elem
-                break
-        
-        if camps_section:
-            # Extract camp cards - they're in nested div structures
-            camp_cards = []
+        while parent and depth < max_depth:
+            # Check for meaningful class names
+            classes = parent.get('class', [])
+            for cls in classes:
+                if isinstance(cls, str) and len(cls) > 3:
+                    # Skip generic wrapper classes
+                    generic_classes = {
+                        'container', 'wrapper', 'content', 'main', 'body',
+                        'row', 'col', 'grid', 'flex', 'section', 'div', 'hs_cos_wrapper'
+                    }
+                    cls_lower = cls.lower()
+                    if cls_lower not in generic_classes and not cls_lower.startswith('hs_'):
+                        # Extract meaningful part
+                        cls_clean = cls.replace('-', ' ').replace('_', ' ').title()
+                        return cls_clean
             
-            # Find all h4 headings (camp names are typically h4)
-            for heading in camps_section.find_all(['h3', 'h4']):
-                heading_text = self._extract_text_content(heading)
-                
-                # Skip section headings
-                if any(word in heading_text.lower() for word in ['upcoming', 'camps for you', 'section', 'heading', 'check out']):
+            # Check for meaningful id
+            elem_id = parent.get('id', '')
+            if elem_id and isinstance(elem_id, str) and len(elem_id) > 3:
+                generic_ids = {'main', 'content', 'wrapper', 'container'}
+                if elem_id.lower() not in generic_ids:
+                    id_clean = elem_id.replace('-', ' ').replace('_', ' ').title()
+                    return id_clean
+            
+            # Check for semantic tags
+            if parent.name in ['nav', 'footer', 'header', 'article', 'aside']:
+                return parent.name.title()
+            
+            parent = parent.find_parent(['section', 'article', 'div', 'main', 'nav', 'footer', 'header'])
+            depth += 1
+        
+        return "General Content"
+    
+    def _split_into_chunks(
+        self, 
+        text: str, 
+        min_chunk_size: int = 200, 
+        max_chunk_size: int = 500
+    ) -> List[str]:
+        """
+        Split text into chunks of appropriate size (200-500 characters).
+        Tries to split at sentence boundaries.
+        """
+        if not text:
+            return []
+        
+        text = text.strip()
+        
+        # If text is already within size, return as single chunk
+        if len(text) <= max_chunk_size:
+            if len(text) >= min_chunk_size:
+                return [text]
+            # If too small, return anyway (will be merged later if needed)
+            return [text] if text else []
+        
+        chunks = []
+        
+        # Split by sentences (period, exclamation, question mark)
+        sentences = re.split(r'([.!?]+(?:\s+|$))', text)
+        
+        # Recombine sentences with their punctuation
+        combined_sentences = []
+        for i in range(0, len(sentences) - 1, 2):
+            if i + 1 < len(sentences):
+                combined_sentences.append(sentences[i] + sentences[i + 1])
+            else:
+                combined_sentences.append(sentences[i])
+        
+        current_chunk = ""
+        for sentence in combined_sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            # Check if adding this sentence would exceed max size
+            potential_chunk = (current_chunk + " " + sentence).strip() if current_chunk else sentence
+            
+            if len(potential_chunk) > max_chunk_size:
+                # Current chunk is full, save it
+                if len(current_chunk) >= min_chunk_size:
+                    chunks.append(current_chunk)
+                    current_chunk = sentence
+                else:
+                    # Current chunk too small, add sentence anyway
+                    current_chunk = potential_chunk
+            else:
+                current_chunk = potential_chunk
+        
+        # Add remaining chunk
+        if current_chunk:
+            if len(current_chunk) >= min_chunk_size:
+                chunks.append(current_chunk)
+            elif chunks:
+                # Merge small last chunk with previous
+                chunks[-1] = (chunks[-1] + " " + current_chunk).strip()
+            else:
+                chunks.append(current_chunk)
+        
+        return chunks
+    
+    def _extract_all_content_elements(self, soup: BeautifulSoup) -> List[Tag]:
+        """
+        Extract ALL content-bearing elements from the page.
+        Includes headings, paragraphs, lists, navigation, cards, footer, etc.
+        """
+        content_elements = []
+        seen_texts = set()
+        
+        # Strategy 1: Extract semantic HTML elements (headings, paragraphs, lists, etc.)
+        semantic_tags = [
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',  # Headings
+            'p',  # Paragraphs
+            'li',  # List items
+            'td', 'th',  # Table cells
+            'dd', 'dt',  # Definition lists
+            'blockquote',  # Quotes
+            'caption',  # Table captions
+            'label',  # Form labels (may contain useful text)
+            'span',  # Spans with text
+            'a',  # Links (navigation, buttons, etc.)
+            'button',  # Buttons
+            'strong', 'b', 'em', 'i',  # Emphasis (may contain important info)
+        ]
+        
+        for tag_name in semantic_tags:
+            elements = soup.find_all(tag_name)
+            for elem in elements:
+                if not isinstance(elem, Tag):
                     continue
                 
-                # This looks like a camp name
-                camp_item = {
-                    "name": heading_text,
-                    "age_range": None,
-                    "description": None,
-                    "price": None,
-                    "duration": None,
-                    "schedule": None,
-                    "location": "TX – Alamo Ranch"
-                }
+                text = self._extract_text_from_element(elem)
+                if not text or len(text) < 5:
+                    continue
                 
-                # Find the card container - go up to find parent div that contains this camp
-                card_container = heading.find_parent(['div', 'section', 'article'])
+                # Skip if we've seen this exact text
+                text_hash = hashlib.md5(text.lower().encode()).hexdigest()
+                if text_hash in seen_texts:
+                    continue
                 
-                # Look for age range before the heading (in previous siblings)
-                prev_elem = heading.find_previous(string=re.compile(r'ages?\s+\d+', re.IGNORECASE))
-                if prev_elem:
-                    age_text = prev_elem.strip() if isinstance(prev_elem, str) else self._extract_text_content(prev_elem.parent)
-                    age_range = self._extract_age_range(age_text)
-                    if age_range:
-                        camp_item["age_range"] = age_range
-                
-                # Also check heading text itself for age range
-                if not camp_item["age_range"]:
-                    age_range = self._extract_age_range(heading_text)
-                    if age_range:
-                        camp_item["age_range"] = age_range
-                
-                if card_container:
-                    card_text = self._extract_text_content(card_container)
-                    
-                    # Extract age range from card if not found
-                    if not camp_item["age_range"]:
-                        age_range = self._extract_age_range(card_text)
-                        if age_range:
-                            camp_item["age_range"] = age_range
-                    
-                    # Extract price - look for $XXX pattern
-                    price = self._extract_price(card_text)
-                    if price:
-                        camp_item["price"] = price
-                    
-                    # Extract description (paragraph after heading)
-                    para = heading.find_next('p')
-                    if para:
-                        desc = self._extract_text_content(para)
-                        # Filter out very short or generic descriptions
-                        if len(desc) > 30 and not any(word in desc.lower() for word in ['view camp', 'enroll', 'learn more']):
-                            camp_item["description"] = desc
-                    
-                    # Extract dates - look for patterns like "Dec 22nd - Dec 22nd"
-                    date_patterns = [
-                        r'([A-Z][a-z]+\s+\d+(?:st|nd|rd|th)?)\s*-\s*([A-Z][a-z]+\s+\d+(?:st|nd|rd|th)?)',
-                        r'(\d{1,2}/\d{1,2})\s*-\s*(\d{1,2}/\d{1,2})',
-                    ]
-                    for pattern in date_patterns:
-                        date_match = re.search(pattern, card_text)
-                        if date_match:
-                            camp_item["duration"] = f"{date_match.group(1)} - {date_match.group(2)}"
-                            break
-                    
-                    # Extract times - look for "12:00 AM - 3:00 AM" pattern
-                    time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', card_text)
-                    if time_match:
-                        camp_item["schedule"] = f"{time_match.group(1)} - {time_match.group(2)}"
-                    
-                    # Only add if we have at least name and some other info
-                    if camp_item["name"] and len(camp_item["name"]) > 3:
-                        # Remove None values
-                        camp_item = {k: v for k, v in camp_item.items() if v is not None}
-                        camp_cards.append(camp_item)
-            
-            # Remove duplicates based on name
-            seen_names = set()
-            unique_camps = []
-            for camp in camp_cards:
-                name_key = camp.get("name", "").lower()
-                if name_key and name_key not in seen_names:
-                    seen_names.add(name_key)
-                    unique_camps.append(camp)
-            
-            camps_data["camps"] = unique_camps
+                # For links and buttons, include even if short (navigation items)
+                if tag_name in ['a', 'button']:
+                    if len(text) >= 2:  # Include navigation items
+                        seen_texts.add(text_hash)
+                        content_elements.append(elem)
+                else:
+                    # For other elements, require more substantial text
+                    if len(text) >= 10:
+                        seen_texts.add(text_hash)
+                        content_elements.append(elem)
         
-        return camps_data
+        # Strategy 2: Extract divs with substantial text content
+        # HubSpot uses lots of nested divs
+        all_divs = soup.find_all('div')
+        for div in all_divs:
+            if not isinstance(div, Tag):
+                continue
+            
+            # Get direct text (not from children)
+            direct_text_nodes = [
+                str(child).strip() 
+                for child in div.children 
+                if isinstance(child, NavigableString) and child.strip()
+            ]
+            direct_text = ' '.join(direct_text_nodes)
+            direct_text = self._clean_text(direct_text)
+            
+            # Get all text from this div
+            all_text = self._extract_text_from_element(div)
+            
+            # Include if it has substantial text (30+ chars)
+            if all_text and len(all_text) >= 30:
+                # Check if this div contains semantic elements or has direct text
+                has_semantic_children = div.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'a', 'button', 'span'])
+                
+                # Include if:
+                # 1. Has semantic children, OR
+                # 2. Has substantial direct text (not just a wrapper)
+                if has_semantic_children or (len(direct_text) >= 20):
+                    # Skip if we've seen this text
+                    text_hash = hashlib.md5(all_text.lower().encode()).hexdigest()
+                    if text_hash not in seen_texts:
+                        seen_texts.add(text_hash)
+                        content_elements.append(div)
+        
+        # Strategy 3: Extract navigation and footer content
+        for nav in soup.find_all(['nav', 'footer', 'header']):
+            if not isinstance(nav, Tag):
+                continue
+            text = self._extract_text_from_element(nav)
+            if text and len(text) >= 10:
+                text_hash = hashlib.md5(text.lower().encode()).hexdigest()
+                if text_hash not in seen_texts:
+                    seen_texts.add(text_hash)
+                    content_elements.append(nav)
+        
+        # Remove nested elements (if parent is already in list)
+        unique_elements = []
+        for elem in content_elements:
+            is_nested = False
+            for existing in unique_elements:
+                # Check if elem is a descendant of existing
+                parent = elem.find_parent()
+                depth = 0
+                while parent and depth < 10:
+                    if parent == existing:
+                        is_nested = True
+                        break
+                    parent = parent.find_parent()
+                    depth += 1
+                    if parent is None or parent.name == 'body' or parent.name == 'html':
+                        break
+            
+            if not is_nested:
+                unique_elements.append(elem)
+        
+        return unique_elements
     
-    def _extract_programs_from_main_page(self, soup: BeautifulSoup) -> Dict[str, Any]:
-        """Extract programs section from main page."""
-        programs_data = {
-            "overview": {
-                "headline": None,
-                "summary": None
-            },
-            "programs": []
-        }
-        
-        # Find "YEAR ROUND programs" section
-        programs_section = None
-        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = self._extract_text_content(heading)
-            if 'year round' in heading_text.lower() or 'program' in heading_text.lower():
-                # Found programs section
-                programs_section = heading.find_parent(['section', 'article', 'div'])
-                if not programs_section:
-                    programs_section = heading.parent
-                
-                programs_data["overview"]["headline"] = heading_text
-                break
-        
-        if not programs_section:
-            logger.warning("Could not find programs section")
-            return programs_data
-        
-        # Extract individual programs (CREATE, JR, ACADEMIES)
-        # Look for program cards - they have headings like "CREATE", "JR", "ACADEMIES"
-        program_names = ['CREATE', 'JR', 'ACADEMIES']
-        
-        for heading in programs_section.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = self._extract_text_content(heading)
-            
-            # Check if this is a program name
-            if heading_text.upper() in program_names or any(name.lower() in heading_text.lower() for name in program_names):
-                program_item = {
-                    "name": heading_text,
-                    "age_range": None,
-                    "description": None
-                }
-                
-                # Find parent container
-                card_container = heading.find_parent(['div', 'section', 'article'])
-                if card_container:
-                    card_text = self._extract_text_content(card_container)
-                    
-                    # Extract age range (look for "AGES X TO Y" near heading)
-                    age_elem = heading.find_previous(string=re.compile(r'ages?\s+\d+', re.IGNORECASE))
-                    if not age_elem:
-                        age_elem = heading.find_next(string=re.compile(r'ages?\s+\d+', re.IGNORECASE))
-                    
-                    if age_elem:
-                        age_text = age_elem.strip() if isinstance(age_elem, str) else self._extract_text_content(age_elem.parent)
-                        age_range = self._extract_age_range(age_text)
-                        if age_range:
-                            program_item["age_range"] = age_range
-                    else:
-                        # Try from card text
-                        age_range = self._extract_age_range(card_text)
-                        if age_range:
-                            program_item["age_range"] = age_range
-                    
-                    # Extract description (paragraph after heading)
-                    para = heading.find_next('p')
-                    if para:
-                        desc = self._extract_text_content(para)
-                        if len(desc) > 20:
-                            program_item["description"] = desc
-                    
-                    if program_item["name"] and (program_item["description"] or program_item["age_range"]):
-                        programs_data["programs"].append(program_item)
-        
-        return programs_data
-    
-    def _extract_additional_programs_from_main_page(self, soup: BeautifulSoup) -> Dict[str, Any]:
-        """Extract additional programs section from main page."""
-        additional_data = {
-            "overview": {
-                "headline": None,
-                "summary": None
-            },
-            "programs": []
-        }
-        
-        # Find "OUR OTHER programs" section
-        additional_section = None
-        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = self._extract_text_content(heading)
-            if 'other program' in heading_text.lower() or 'additional' in heading_text.lower():
-                additional_section = heading.find_parent(['section', 'article', 'div'])
-                if not additional_section:
-                    additional_section = heading.parent
-                
-                additional_data["overview"]["headline"] = heading_text
-                break
-        
-        if not additional_section:
-            logger.warning("Could not find additional programs section")
-            return additional_data
-        
-        # Extract individual additional programs
-        # Look for headings: PARENT'S NIGHT OUT, BIRTHDAY PARTIES, CLUBS, HOME SCHOOLING, AFTER SCHOOL programs
-        program_keywords = ['parent', 'birthday', 'party', 'club', 'home school', 'after school']
-        
-        for heading in additional_section.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = self._extract_text_content(heading)
-            
-            # Check if this is an additional program
-            if any(keyword in heading_text.lower() for keyword in program_keywords):
-                program_item = {
-                    "name": heading_text,
-                    "age_range": None,
-                    "description": None
-                }
-                
-                # Find parent container
-                card_container = heading.find_parent(['div', 'section', 'article'])
-                if card_container:
-                    # Look for description (might be in sibling or parent)
-                    para = heading.find_next('p')
-                    if para:
-                        desc = self._extract_text_content(para)
-                        if len(desc) > 10:
-                            program_item["description"] = desc
-                    
-                    # Extract age range if present
-                    card_text = self._extract_text_content(card_container)
-                    age_range = self._extract_age_range(card_text)
-                    if age_range:
-                        program_item["age_range"] = age_range
-                    
-                    if program_item["name"]:
-                        additional_data["programs"].append(program_item)
-        
-        return additional_data
-    
-    def scrape(self, url: str) -> Dict[str, Any]:
+    def scrape(self, url: str) -> List[Dict[str, Any]]:
         """
-        Main scraping method that extracts structured data.
+        Scrape a URL and return ALL content as chunks.
         
         Args:
-            url: Base URL (e.g., https://codeninjas-39646145.hs-sites.com/tx-alamo-ranch/)
-        
+            url: URL to scrape
+            
         Returns:
-            Dict with keys: 'camps', 'programs', 'additional_programs'
+            List of chunk dictionaries with metadata:
+            {
+                "chunk_id": "...",
+                "url": "...",
+                "section": "...",
+                "text": "...",
+                "metadata": {...}
+            }
         """
-        # Extract camps from /camps page
-        camps_data = self._extract_camps_from_camps_page(url)
-        
-        # Extract programs and additional programs from main page
         html = self.fetch_html(url)
         if not html:
-            logger.error(f"Failed to fetch HTML from {url}")
-            return {
-                "camps": camps_data,
-                "programs": {"overview": {}, "programs": []},
-                "additional_programs": {"overview": {}, "programs": []}
-            }
+            logger.warning(f"Could not fetch HTML from {url}")
+            return []
         
         soup = self.parse_html(html)
         self._remove_unwanted_elements(soup)
         
-        programs_data = self._extract_programs_from_main_page(soup)
-        additional_data = self._extract_additional_programs_from_main_page(soup)
+        chunks = []
+        content_elements = self._extract_all_content_elements(soup)
         
-        result = {
-            "camps": camps_data,
-            "programs": programs_data,
-            "additional_programs": additional_data
-        }
+        logger.info(f"Found {len(content_elements)} content elements on {url}")
         
-        total_camps = len(camps_data.get('camps', []))
-        total_programs = len(programs_data.get('programs', []))
-        total_additional = len(additional_data.get('programs', []))
+        for idx, element in enumerate(content_elements):
+            text = self._extract_text_from_element(element)
+            if not text or len(text) < 10:
+                continue
+            
+            # Identify section dynamically
+            section = self._identify_section_name(element)
+            
+            # Split into chunks if needed (200-500 chars)
+            text_chunks = self._split_into_chunks(text, min_chunk_size=200, max_chunk_size=500)
+            
+            # If text is too short, merge with previous chunk or keep as is
+            if not text_chunks and text:
+                text_chunks = [text]
+            
+            for chunk_idx, chunk_text in enumerate(text_chunks):
+                if not chunk_text or len(chunk_text.strip()) < 20:
+                    continue
+                
+                # Generate unique chunk ID
+                chunk_id = hashlib.md5(
+                    f"{url}_{idx}_{chunk_idx}_{chunk_text[:50]}".encode()
+                ).hexdigest()
+                
+                chunk = {
+                    "chunk_id": chunk_id,
+                    "url": url,
+                    "section": section,
+                    "text": chunk_text.strip(),
+                    "metadata": {
+                        "element_type": element.name if isinstance(element, Tag) else "unknown",
+                        "element_index": idx,
+                        "chunk_index": chunk_idx,
+                        "text_length": len(chunk_text),
+                        "type": "text_content"
+                    }
+                }
+                chunks.append(chunk)
         
-        logger.info(f"Scraped {url}: "
-                   f"{total_camps} camps, "
-                   f"{total_programs} programs, "
-                   f"{total_additional} additional programs")
+        # Deduplicate chunks (remove exact duplicates)
+        seen_chunks = set()
+        unique_chunks = []
+        for chunk in chunks:
+            text_hash = hashlib.md5(chunk["text"].lower().encode()).hexdigest()
+            if text_hash not in seen_chunks:
+                seen_chunks.add(text_hash)
+                unique_chunks.append(chunk)
         
-        # Debug: print sample extracted data
-        if total_camps > 0:
-            logger.info(f"Sample camp: {camps_data['camps'][0]}")
-        if total_programs > 0:
-            logger.info(f"Sample program: {programs_data['programs'][0]}")
-        if total_additional > 0:
-            logger.info(f"Sample additional program: {additional_data['programs'][0]}")
+        logger.info(f"Extracted {len(unique_chunks)} unique chunks from {url}")
         
-        return result
+        # Log sample chunks for validation
+        if unique_chunks:
+            logger.info(f"Sample chunk 1: {unique_chunks[0].get('text', '')[:150]}...")
+            logger.info(f"Sample section 1: {unique_chunks[0].get('section', 'Unknown')}")
+            if len(unique_chunks) > 1:
+                logger.info(f"Sample chunk 2: {unique_chunks[1].get('text', '')[:150]}...")
+                logger.info(f"Sample section 2: {unique_chunks[1].get('section', 'Unknown')}")
+        
+        return unique_chunks

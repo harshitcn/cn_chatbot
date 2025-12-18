@@ -37,7 +37,10 @@ async def get_faq_answer(request: FAQRequest) -> FAQResponse:
             logger.warning("Retriever vector store not initialized, attempting to initialize...")
             retriever._initialize_vector_store()
         
-        answer = await retriever.get_answer(request.question, location_slug=request.location_slug)
+        # Support both 'location' and 'location_slug' field names
+        location_slug = request.location_slug or getattr(request, 'location', None)
+        logger.info(f"Location slug for request: '{location_slug}'")
+        answer = await retriever.get_answer(request.question, location_slug=location_slug)
         logger.info("FAQ request processed successfully")
         return FAQResponse(answer=answer)
         

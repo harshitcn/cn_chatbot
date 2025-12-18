@@ -94,12 +94,16 @@ def build_vector_store(
     documents = []
     for idx, chunk in enumerate(chunks):
         # Store text in page_content, metadata contains type and other info
+        chunk_metadata = chunk.get("metadata", {})
         doc = Document(
             page_content=chunk.get("text", ""),
             metadata={
                 "chunk_index": idx,
-                "type": chunk.get("type", "unknown"),
-                **chunk.get("metadata", {})
+                "chunk_id": chunk.get("chunk_id", ""),
+                "section": chunk.get("section", "General"),
+                "url": chunk.get("url", ""),
+                "type": chunk_metadata.get("type", chunk.get("type", "text_content")),
+                **chunk_metadata  # Include all metadata from chunk
             }
         )
         documents.append(doc)
