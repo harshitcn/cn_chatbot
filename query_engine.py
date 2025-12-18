@@ -34,8 +34,8 @@ class DynamicQueryEngine:
     def _find_relevant_chunks(
         self, 
         query: str, 
-        top_k: int = 5,
-        similarity_threshold: float = 0.3
+        top_k: int = 10,  # Increased to get more results
+        similarity_threshold: float = 0.2  # Lower threshold to get more matches
     ) -> List[Dict[str, Any]]:
         """
         Find relevant chunks using semantic search.
@@ -79,6 +79,7 @@ class DynamicQueryEngine:
     def _format_answer(self, query: str, chunks: List[Dict[str, Any]]) -> str:
         """
         Format chunks into a readable answer.
+        Improved to prioritize structured camp items and better organize information.
         
         Args:
             query: Original user query
@@ -90,34 +91,60 @@ class DynamicQueryEngine:
         if not chunks:
             return "I couldn't find relevant information to answer your question. Please try rephrasing or asking about something else."
         
-        # Group chunks by type for better organization
-        chunks_by_type = {}
-        for chunk in chunks:
-            chunk_type = chunk.get('type', 'unknown')
-            if chunk_type not in chunks_by_type:
-                chunks_by_type[chunk_type] = []
-            chunks_by_type[chunk_type].append(chunk)
+        # Prioritize camp_item chunks for camp-related queries
+        query_lower = query.lower()
+        is_camp_query = 'camp' in query_lower
+        
+        # Sort chunks: camp_item first if it's a camp query, then by similarity score
+        if is_camp_query:
+            camp_items = [c for c in chunks if c.get('type') == 'camp_item']
+            other_chunks = [c for c in chunks if c.get('type') != 'camp_item']
+            sorted_chunks = camp_items + other_chunks
+        else:
+            sorted_chunks = chunks
         
         # Build formatted answer
         answer_parts = []
+        seen_texts = set()  # Avoid duplicates
         
-        # Add most relevant chunks first
-        for chunk in chunks[:5]:  # Top 5 chunks
-            text = chunk.get('text', '')
-            if text:
-                # Add title if available
-                metadata = chunk.get('metadata', {})
-                if 'title' in metadata:
-                    answer_parts.append(f"{metadata['title']}: {text}")
-                else:
-                    answer_parts.append(text)
+        # Add most relevant chunks
+        for chunk in sorted_chunks[:15]:  # Increased to 15 for more comprehensive answers
+            text = chunk.get('text', '').strip()
+            if not text or text.lower() in seen_texts:
+                continue
+            
+            metadata = chunk.get('metadata', {})
+            chunk_type = chunk.get('type', 'unknown')
+            
+            # Format based on chunk type
+            if chunk_type == 'camp_item':
+                # Format camp items nicely
+                camp_name = metadata.get('camp_name', '')
+                age_group = metadata.get('age_group', '')
+                
+                formatted_item = ""
+                if camp_name:
+                    formatted_item = f"**{camp_name}**"
+                if age_group:
+                    formatted_item += f" (Ages {age_group})"
+                if formatted_item:
+                    formatted_item += ": "
+                formatted_item += text
+                answer_parts.append(formatted_item)
+            elif 'title' in metadata:
+                answer_parts.append(f"**{metadata['title']}**: {text}")
+            else:
+                answer_parts.append(text)
+            
+            seen_texts.add(text.lower())
         
         # Join with newlines for readability
         formatted_answer = '\n\n'.join(answer_parts)
         
-        # Limit length to avoid overwhelming response
-        if len(formatted_answer) > 2000:
-            formatted_answer = formatted_answer[:2000] + "..."
+        # Limit length but be more generous for camp listings
+        max_length = 3000 if is_camp_query else 2000
+        if len(formatted_answer) > max_length:
+            formatted_answer = formatted_answer[:max_length] + "..."
         
         return formatted_answer
     

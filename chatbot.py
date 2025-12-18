@@ -115,8 +115,8 @@ class DynamicChatbot:
         self, 
         query: str,
         url: Optional[str] = None,
-        top_k: int = 5,
-        similarity_threshold: float = 0.3
+        top_k: int = 15,  # Increased for more comprehensive answers
+        similarity_threshold: float = 0.2  # Lower threshold to get more matches
     ) -> Dict[str, Any]:
         """
         Answer a user query by scraping (if needed) and using semantic search.
