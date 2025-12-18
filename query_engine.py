@@ -1,200 +1,257 @@
 """
-Dynamic query engine using semantic search with embeddings.
-Uses cosine similarity to find relevant chunks for any query.
-No hardcoded keyword matching - fully dynamic.
+Query engine with intent detection and structured data querying.
+Detects user intent (camps/programs/additional) and queries only relevant structured data.
 """
 import logging
 from typing import Dict, List, Any, Optional
 
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-
-from embeddings import get_embeddings
-
 logger = logging.getLogger(__name__)
 
 
-class DynamicQueryEngine:
+class StructuredQueryEngine:
     """
-    Dynamic query engine that uses semantic search with embeddings.
-    Works for ANY query without hardcoded keywords or categories.
+    Query engine that detects intent and queries structured data.
+    Returns clean, structured answers without noise.
     """
     
-    def __init__(self, vector_store: Optional[FAISS] = None, embeddings: Optional[HuggingFaceEmbeddings] = None):
-        """
-        Initialize the query engine.
-        
-        Args:
-            vector_store: FAISS vector store with chunk embeddings
-            embeddings: Embeddings model (will create if not provided)
-        """
-        self.vector_store = vector_store
-        self.embeddings = embeddings or get_embeddings()
+    def __init__(self):
+        """Initialize the query engine."""
+        pass
     
-    def _find_relevant_chunks(
-        self, 
-        query: str, 
-        top_k: int = 10,  # Increased to get more results
-        similarity_threshold: float = 0.2  # Lower threshold to get more matches
-    ) -> List[Dict[str, Any]]:
+    def detect_intent(self, query: str) -> str:
         """
-        Find relevant chunks using semantic search.
+        Detect user intent from query.
         
-        Args:
-            query: User query string
-            top_k: Number of top chunks to return
-            similarity_threshold: Minimum similarity score (0-1)
-            
         Returns:
-            List[Dict[str, Any]]: List of relevant chunks with similarity scores
+            'camps', 'programs', 'additional_programs', or 'general'
         """
-        if not self.vector_store:
-            logger.warning("No vector store available")
-            return []
+        query_lower = query.lower()
         
-        try:
-            # Use FAISS similarity search
-            results = self.vector_store.similarity_search_with_score(query, k=top_k)
-            
-            relevant_chunks = []
-            for doc, score in results:
-                # FAISS returns distance (lower is better), convert to similarity
-                # For normalized embeddings, similarity = 1 - distance
-                similarity = 1 - score if score <= 1 else 1 / (1 + score)
-                
-                if similarity >= similarity_threshold:
-                    relevant_chunks.append({
-                        'text': doc.page_content,
-                        'type': doc.metadata.get('type', 'unknown'),
-                        'metadata': {k: v for k, v in doc.metadata.items() if k != 'type'},
-                        'similarity_score': float(similarity)
-                    })
-            
-            return relevant_chunks
+        # Camp-related keywords
+        camp_keywords = ['camp', 'camps', 'summer camp', 'winter camp']
+        if any(keyword in query_lower for keyword in camp_keywords):
+            return 'camps'
         
-        except Exception as e:
-            logger.error(f"Error in semantic search: {str(e)}", exc_info=True)
-            return []
+        # Additional programs keywords
+        additional_keywords = [
+            'additional', 'other program', 'parent', 'birthday', 'party',
+            'night out', 'parents night', 'home school', 'homeschool'
+        ]
+        if any(keyword in query_lower for keyword in additional_keywords):
+            return 'additional_programs'
+        
+        # Programs keywords
+        program_keywords = ['program', 'programs', 'core program', 'academy', 'create', 'jr']
+        if any(keyword in query_lower for keyword in program_keywords):
+            return 'programs'
+        
+        # Default to general
+        return 'general'
     
-    def _format_answer(self, query: str, chunks: List[Dict[str, Any]]) -> str:
-        """
-        Format chunks into a readable answer.
-        Improved to prioritize structured camp items and better organize information.
+    def _format_camps_answer(self, camps_data: Dict[str, Any], location: Optional[str] = None) -> Dict[str, Any]:
+        """Format camps data into structured answer."""
+        answer = {
+            "category": "camps",
+            "location": location or "TX – Alamo Ranch",
+            "overview": camps_data.get("overview", {}),
+            "highlights": [],
+            "items": []
+        }
         
-        Args:
-            query: Original user query
-            chunks: List of relevant chunks
-            
-        Returns:
-            str: Formatted answer text
-        """
-        if not chunks:
-            return "I couldn't find relevant information to answer your question. Please try rephrasing or asking about something else."
+        # Extract highlights from overview
+        overview = camps_data.get("overview", {})
+        if overview.get("summary"):
+            # Extract key points from summary (first 2-3 sentences)
+            sentences = overview["summary"].split('. ')
+            answer["highlights"] = [s.strip() + '.' for s in sentences[:3] if s.strip()]
         
-        # Sort chunks by similarity score (already sorted by relevance from semantic search)
-        # No keyword-based filtering - semantic search handles relevance
-        sorted_chunks = chunks
+        # Format camp items
+        camps = camps_data.get("camps", [])
+        for camp in camps:
+            item = {
+                "name": camp.get("name", "Camp"),
+                "age_range": camp.get("age_range"),
+                "description": camp.get("description"),
+                "duration": camp.get("duration"),
+                "schedule": camp.get("schedule")
+            }
+            # Remove None values
+            item = {k: v for k, v in item.items() if v is not None}
+            answer["items"].append(item)
         
-        # Build formatted answer
-        answer_parts = []
-        seen_texts = set()  # Avoid duplicates
+        return answer
+    
+    def _format_programs_answer(self, programs_data: Dict[str, Any], location: Optional[str] = None) -> Dict[str, Any]:
+        """Format programs data into structured answer."""
+        answer = {
+            "category": "programs",
+            "location": location or "TX – Alamo Ranch",
+            "overview": programs_data.get("overview", {}),
+            "highlights": [],
+            "items": []
+        }
         
-        # Add most relevant chunks
-        for chunk in sorted_chunks[:15]:  # Increased to 15 for more comprehensive answers
-            text = chunk.get('text', '').strip()
-            if not text or text.lower() in seen_texts:
-                continue
-            
-            metadata = chunk.get('metadata', {})
-            chunk_type = chunk.get('type', 'unknown')
-            
-            # Format based on chunk type and metadata
-            if chunk_type == 'structured_item':
-                # Format structured items nicely (dynamic - works for any structured content)
-                item_name = metadata.get('item_name', '')
-                age_group = metadata.get('age_group', '')
-                price = metadata.get('price', '')
-                
-                formatted_item = ""
-                if item_name:
-                    formatted_item = f"**{item_name}**"
-                if age_group:
-                    formatted_item += f" (Ages {age_group})"
-                if price:
-                    formatted_item += f" - {price}"
-                if formatted_item:
-                    formatted_item += ": "
-                formatted_item += text
-                answer_parts.append(formatted_item)
-            elif 'title' in metadata:
-                answer_parts.append(f"**{metadata['title']}**: {text}")
-            else:
-                answer_parts.append(text)
-            
-            seen_texts.add(text.lower())
+        overview = programs_data.get("overview", {})
+        if overview.get("summary"):
+            sentences = overview["summary"].split('. ')
+            answer["highlights"] = [s.strip() + '.' for s in sentences[:3] if s.strip()]
         
-        # Join with newlines for readability
-        formatted_answer = '\n\n'.join(answer_parts)
+        programs = programs_data.get("programs", [])
+        for program in programs:
+            item = {
+                "name": program.get("name", "Program"),
+                "age_range": program.get("age_range"),
+                "description": program.get("description")
+            }
+            item = {k: v for k, v in item.items() if v is not None}
+            answer["items"].append(item)
         
-        # Limit length to avoid overwhelming response
-        max_length = 3000
-        if len(formatted_answer) > max_length:
-            formatted_answer = formatted_answer[:max_length] + "..."
+        return answer
+    
+    def _format_additional_programs_answer(self, additional_data: Dict[str, Any], location: Optional[str] = None) -> Dict[str, Any]:
+        """Format additional programs data into structured answer."""
+        answer = {
+            "category": "additional_programs",
+            "location": location or "TX – Alamo Ranch",
+            "overview": additional_data.get("overview", {}),
+            "highlights": [],
+            "items": []
+        }
         
-        return formatted_answer
+        overview = additional_data.get("overview", {})
+        if overview.get("summary"):
+            sentences = overview["summary"].split('. ')
+            answer["highlights"] = [s.strip() + '.' for s in sentences[:3] if s.strip()]
+        
+        programs = additional_data.get("programs", [])
+        for program in programs:
+            item = {
+                "name": program.get("name", "Program"),
+                "age_range": program.get("age_range"),
+                "description": program.get("description")
+            }
+            item = {k: v for k, v in item.items() if v is not None}
+            answer["items"].append(item)
+        
+        return answer
+    
+    def _format_general_answer(self, all_data: Dict[str, Any], location: Optional[str] = None) -> Dict[str, Any]:
+        """Format general answer when intent is unclear."""
+        # Try to provide a summary of all categories
+        answer = {
+            "category": "general",
+            "location": location or "TX – Alamo Ranch",
+            "overview": {},
+            "highlights": [],
+            "items": []
+        }
+        
+        # Combine highlights from all sections
+        highlights = []
+        for category in ['camps', 'programs', 'additional_programs']:
+            category_data = all_data.get(category, {})
+            overview = category_data.get("overview", {})
+            if overview.get("summary"):
+                highlights.append(overview["summary"][:200])
+        
+        answer["highlights"] = highlights[:3]
+        
+        return answer
     
     def answer_query(
-        self, 
+        self,
         query: str,
-        top_k: int = 5,
-        similarity_threshold: float = 0.3
+        structured_data: Dict[str, Any],
+        location: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Answer a user query using semantic search.
-        Works for ANY query without hardcoded keywords.
+        Answer a query using structured data.
         
         Args:
             query: User query string
-            top_k: Number of top chunks to retrieve
-            similarity_threshold: Minimum similarity score (0-1)
+            structured_data: Structured data from scraper
+            location: Optional location string
             
         Returns:
-            Dict[str, Any]: Structured response with:
-                {
-                    'status': str,  # 'success', 'no_results', or 'error'
-                    'query': str,  # Original query
-                    'chunks': List[Dict],  # Relevant chunks with scores
-                    'formatted': str  # Formatted answer text
-                }
+            Dict with structured answer
         """
         try:
-            if not query or not query.strip():
+            # Detect intent
+            intent = self.detect_intent(query)
+            logger.info(f"Detected intent: {intent} for query: {query}")
+            
+            # Format answer based on intent
+            if intent == 'camps':
+                camps_data = structured_data.get("camps", {})
+                if camps_data.get("camps"):
+                    return {
+                        "status": "success",
+                        "query": query,
+                        "answer": self._format_camps_answer(camps_data, location)
+                    }
+                else:
+                    return {
+                        "status": "no_results",
+                        "query": query,
+                        "answer": {
+                            "category": "camps",
+                            "location": location or "TX – Alamo Ranch",
+                            "message": "No camp information found."
+                        }
+                    }
+            
+            elif intent == 'programs':
+                programs_data = structured_data.get("programs", {})
+                if programs_data.get("programs"):
+                    return {
+                        "status": "success",
+                        "query": query,
+                        "answer": self._format_programs_answer(programs_data, location)
+                    }
+                else:
+                    return {
+                        "status": "no_results",
+                        "query": query,
+                        "answer": {
+                            "category": "programs",
+                            "location": location or "TX – Alamo Ranch",
+                            "message": "No program information found."
+                        }
+                    }
+            
+            elif intent == 'additional_programs':
+                additional_data = structured_data.get("additional_programs", {})
+                if additional_data.get("programs"):
+                    return {
+                        "status": "success",
+                        "query": query,
+                        "answer": self._format_additional_programs_answer(additional_data, location)
+                    }
+                else:
+                    return {
+                        "status": "no_results",
+                        "query": query,
+                        "answer": {
+                            "category": "additional_programs",
+                            "location": location or "TX – Alamo Ranch",
+                            "message": "No additional program information found."
+                        }
+                    }
+            
+            else:  # general
                 return {
-                    "status": "error",
+                    "status": "success",
                     "query": query,
-                    "chunks": [],
-                    "formatted": "Please provide a valid question."
+                    "answer": self._format_general_answer(structured_data, location)
                 }
-            
-            # Find relevant chunks using semantic search
-            chunks = self._find_relevant_chunks(query, top_k=top_k, similarity_threshold=similarity_threshold)
-            
-            # Format answer
-            formatted_answer = self._format_answer(query, chunks)
-            
-            return {
-                "status": "success" if chunks else "no_results",
-                "query": query,
-                "chunks": chunks,
-                "formatted": formatted_answer
-            }
         
         except Exception as e:
             logger.error(f"Error answering query: {str(e)}", exc_info=True)
             return {
                 "status": "error",
                 "query": query,
-                "chunks": [],
-                "formatted": "I'm sorry, I encountered an error processing your query. Please try again."
+                "answer": {
+                    "category": "error",
+                    "message": "I'm sorry, I encountered an error processing your query."
+                }
             }
-

@@ -1,6 +1,6 @@
 """
-Dynamic web scraper that extracts all content from a website as text chunks.
-No hardcoded keywords or categories - extracts everything.
+Structured web scraper that extracts camps, programs, and additional programs as structured data.
+Targets specific sections and avoids generic content.
 """
 import logging
 import re
@@ -11,10 +11,10 @@ from bs4 import BeautifulSoup, Tag
 logger = logging.getLogger(__name__)
 
 
-class DynamicScraper:
+class StructuredScraper:
     """
-    Fully dynamic web scraper that extracts all meaningful content as text chunks.
-    No hardcoded keywords, categories, or logic - extracts everything from the page.
+    Structured web scraper that extracts camps, programs, and additional programs
+    as structured Python objects, avoiding generic content.
     """
     
     def __init__(self, timeout: int = 15, user_agent: Optional[str] = None):
@@ -38,15 +38,7 @@ class DynamicScraper:
         })
     
     def fetch_html(self, url: str) -> Optional[str]:
-        """
-        Fetch HTML content from a URL.
-        
-        Args:
-            url: URL to fetch
-            
-        Returns:
-            Optional[str]: HTML content or None if fetch fails
-        """
+        """Fetch HTML content from a URL."""
         try:
             logger.info(f"Fetching HTML from: {url}")
             response = self.session.get(url, timeout=self.timeout, allow_redirects=True)
@@ -57,22 +49,11 @@ class DynamicScraper:
             return None
     
     def parse_html(self, html: str) -> BeautifulSoup:
-        """
-        Parse HTML string into BeautifulSoup object.
-        
-        Args:
-            html: HTML content string
-            
-        Returns:
-            BeautifulSoup: Parsed soup object
-        """
+        """Parse HTML string into BeautifulSoup object."""
         return BeautifulSoup(html, 'html.parser')
     
     def _remove_unwanted_elements(self, soup: BeautifulSoup) -> None:
-        """
-        Remove unwanted elements from the soup (scripts, styles, nav, etc.).
-        Keeps all content elements.
-        """
+        """Remove unwanted elements: scripts, styles, nav, footer, header, etc."""
         unwanted_tags = [
             "script", "style", "nav", "footer", "header", "form", "button",
             "input", "select", "textarea", "noscript", "iframe", "svg",
@@ -86,7 +67,8 @@ class DynamicScraper:
         unwanted_selectors = [
             'nav', 'navigation', 'menu', 'sidebar', 'footer', 'header',
             'form', 'button', 'modal', 'popup', 'cookie', 'consent',
-            'social', 'share', 'search', 'filter', 'pagination', 'breadcrumb'
+            'social', 'share', 'search', 'filter', 'pagination', 'breadcrumb',
+            'testimonial', 'review', 'quote'  # Remove testimonials
         ]
         for selector in unwanted_selectors:
             for element in soup.find_all(class_=lambda x: x and selector in str(x).lower()):
@@ -95,550 +77,420 @@ class DynamicScraper:
                 element.decompose()
     
     def _extract_text_content(self, element: Tag) -> str:
-        """
-        Extract clean text content from an element.
-        
-        Args:
-            element: BeautifulSoup Tag element
-            
-        Returns:
-            str: Clean text content
-        """
+        """Extract clean text content from an element."""
         if not element:
             return ""
         text = element.get_text(separator=' ', strip=True)
-        # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
     
-    def _is_meaningful_text(self, text: str, min_length: int = 20) -> bool:
-        """
-        Check if text is meaningful (not just UI noise).
-        
-        Args:
-            text: Text to check
-            min_length: Minimum length to consider meaningful
-            
-        Returns:
-            bool: True if text is meaningful
-        """
-        if not text or len(text) < min_length:
-            return False
-        
-        # Skip very short all-caps text (likely UI labels)
-        if text.isupper() and len(text) < 50:
-            return False
-        
-        # Skip common UI noise patterns
-        ui_noise = [
-            'field is required', 'required', 'submit', 'click', 'close', 'icon',
-            'find location', 'change location', 'locations near you',
-            'cookie', 'follow us', 'social', 'share', 'back to site',
-            'hamburger', 'ninja icon', 'location icon', 'no location selected'
+    def _extract_age_range(self, text: str) -> Optional[str]:
+        """Extract age range from text."""
+        patterns = [
+            r'ages?\s+(\d+)\s*(?:to|-|–|—)\s*(\d+)',  # Ages 5-12
+            r'ages?\s+(\d+)',  # Ages 8
+            r'\((\d+)\+?\)',  # (8+)
+            r'\((\d+)\s*(?:to|-|–|—)\s*(\d+)\)',  # (5-7)
+            r'(\d+)\s*(?:to|-|–|—)\s*(\d+)\s*years?',  # 5-12 years
         ]
-        text_lower = text.lower()
-        if any(noise in text_lower for noise in ui_noise):
-            return False
-        
-        return True
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                if match.lastindex == 2:
+                    return f"{match.group(1)}-{match.group(2)}"
+                else:
+                    return f"{match.group(1)}+" if '+' in match.group(0) else match.group(1)
+        return None
     
-    def _extract_headings(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    def _find_section_by_heading(self, soup: BeautifulSoup, heading_keywords: List[str]) -> Optional[Tag]:
         """
-        Extract all headings (h1-h6) as chunks.
-        
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of heading chunks
+        Find a section by looking for headings containing specific keywords.
+        Returns the section container that follows the heading.
         """
-        chunks = []
         for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            text = self._extract_text_content(heading)
-            if self._is_meaningful_text(text):
-                chunks.append({
-                    'text': text,
-                    'type': 'heading',
-                    'tag': heading.name,
-                    'metadata': {}
-                })
-        return chunks
+            heading_text = self._extract_text_content(heading).lower()
+            if any(keyword.lower() in heading_text for keyword in heading_keywords):
+                # Find the parent container (section, article, or div)
+                parent = heading.parent
+                while parent and parent.name not in ['section', 'article', 'div', 'body']:
+                    parent = parent.parent
+                
+                if parent and parent.name != 'body':
+                    return parent
+                
+                # If no container found, look for next sibling section
+                next_sibling = heading.find_next_sibling(['section', 'article', 'div'])
+                if next_sibling:
+                    return next_sibling
+                
+                # Look for parent's next sibling
+                if parent:
+                    next_sibling = parent.find_next_sibling(['section', 'article', 'div'])
+                    if next_sibling:
+                        return next_sibling
+        
+        return None
     
-    def _extract_paragraphs(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """
-        Extract all paragraphs as chunks.
+    def _extract_camps_section(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """Extract camps section with structured data."""
+        camps_data = {
+            "overview": {
+                "headline": None,
+                "age_range": None,
+                "summary": None
+            },
+            "camps": []
+        }
         
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of paragraph chunks
-        """
-        chunks = []
-        for para in soup.find_all('p'):
-            text = self._extract_text_content(para)
-            if self._is_meaningful_text(text):
-                chunks.append({
-                    'text': text,
-                    'type': 'paragraph',
-                    'metadata': {}
-                })
-        return chunks
-    
-    def _extract_list_items(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """
-        Extract all list items as chunks.
-        Each list item is treated as a separate chunk to preserve individual items.
+        # Find camps section
+        camps_section = self._find_section_by_heading(soup, ['camp', 'camps'])
         
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of list item chunks
-        """
-        chunks = []
-        for li in soup.find_all('li'):
-            text = self._extract_text_content(li)
-            if self._is_meaningful_text(text, min_length=10):
-                # Try to extract structured info from list item
-                metadata = {}
-                
-                # Look for age groups, prices, etc. in the list item
-                age_match = re.search(r'\((\d+)\+?\)|\((\d+)\s*(?:to|-|–|—)\s*(\d+)\)|ages?\s+(\d+)', text, re.IGNORECASE)
-                if age_match:
-                    if age_match.group(3):  # Range like (5-7)
-                        metadata['age_group'] = f"{age_match.group(2)}-{age_match.group(3)}"
-                    elif age_match.group(1):  # Single like (8+)
-                        metadata['age_group'] = f"{age_match.group(1)}+"
-                    elif age_match.group(4):  # Ages 8
-                        metadata['age_group'] = age_match.group(4)
-                
-                chunks.append({
-                    'text': text,
-                    'type': 'list_item',
-                    'metadata': metadata
-                })
-        return chunks
-    
-    def _extract_cards_and_sections(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """
-        Extract content from cards, sections, articles, and divs.
-        Improved to extract individual items from containers.
-        Tries to split containers into individual items when possible.
+        if not camps_section:
+            logger.warning("Could not find camps section")
+            return camps_data
         
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of card/section chunks
-        """
-        chunks = []
+        # Extract overview from heading and first paragraph
+        heading = camps_section.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+        if heading:
+            camps_data["overview"]["headline"] = self._extract_text_content(heading)
+            heading_text = self._extract_text_content(heading)
+            age_range = self._extract_age_range(heading_text)
+            if age_range:
+                camps_data["overview"]["age_range"] = age_range
         
-        # Find all potential content containers
-        # NO keyword filtering - extract ALL meaningful containers
-        containers = soup.find_all(['section', 'article', 'div'], 
-                                  class_=lambda x: x and isinstance(x, (list, str)))
+        # Find summary paragraph
+        first_para = camps_section.find('p')
+        if first_para:
+            summary = self._extract_text_content(first_para)
+            if len(summary) > 50:  # Meaningful summary
+                camps_data["overview"]["summary"] = summary
+                age_range = self._extract_age_range(summary)
+                if age_range and not camps_data["overview"]["age_range"]:
+                    camps_data["overview"]["age_range"] = age_range
         
-        for container in containers:
-            # Skip if container is too small or likely UI element
-            container_text = self._extract_text_content(container)
-            if not self._is_meaningful_text(container_text, min_length=30):
-                continue
-            
-            # Check if container has substantial content (structural check, not keyword-based)
-            has_heading = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) is not None
-            has_multiple_elements = len(container.find_all(['p', 'span', 'div', 'li'])) > 1
-            has_substantial_text = len(container_text) > 50
-            
-            is_meaningful_container = has_heading or has_multiple_elements or has_substantial_text
-            
-            if not is_meaningful_container:
-                continue
-            
-            # Try to find a title/heading within the container
-            title = None
-            title_elem = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-            if title_elem:
-                title = self._extract_text_content(title_elem)
-            
-            # Check if container has direct child elements that might be individual items
-            # Look for direct children that are paragraphs, divs, or spans with substantial content
-            direct_children = [child for child in container.children if isinstance(child, Tag)]
-            
-            # If container has multiple direct children with substantial text, treat each as separate item
-            individual_items = []
-            for child in direct_children:
-                # Skip nested containers (they'll be processed separately)
-                if child.name in ['section', 'article']:
-                    continue
-                
-                child_text = self._extract_text_content(child)
-                if self._is_meaningful_text(child_text, min_length=20):
-                    # Check if this child looks like a separate item
-                    # (has its own structure, or is a substantial standalone element)
-                    has_own_structure = child.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b']) is not None
-                    is_substantial = len(child_text) > 50
-                    
-                    if has_own_structure or is_substantial:
-                        individual_items.append({
-                            'text': child_text,
-                            'title': title if title and title in child_text else None
-                        })
-            
-            # If we found individual items, create chunks for each
-            if len(individual_items) > 1:
-                for item in individual_items:
-                    combined_text = item['text']
-                    if item['title'] and item['title'] not in combined_text:
-                        combined_text = f"{item['title']}. {combined_text}"
-                    
-                    chunk = {
-                        'text': combined_text,
-                        'type': 'card_section',
-                        'metadata': {}
-                    }
-                    if item['title']:
-                        chunk['metadata']['title'] = item['title']
-                    chunks.append(chunk)
-            else:
-                # Single item or no clear separation - extract as one chunk
-                # Extract all text elements in order, preserving structure
-                text_elements = []
-                
-                # Get direct text nodes and immediate children
-                for elem in container.find_all(['p', 'span', 'div', 'li', 'strong', 'em', 'b', 'i'], recursive=False):
-                    elem_text = self._extract_text_content(elem)
-                    if elem_text and len(elem_text.strip()) > 5:
-                        text_elements.append(elem_text)
-                
-                # If we found structured elements, use them
-                if text_elements:
-                    # Try to split if text contains multiple sentences that might be separate items
-                    # Look for patterns like "Item1. Item2! Item3" where each might be a separate item
-                    all_text = ' '.join(text_elements)
-                    
-                    # Split by sentence boundaries if text is long and has multiple sentences
-                    if len(all_text) > 100 and all_text.count('.') + all_text.count('!') > 2:
-                        # Try splitting by periods/exclamation marks followed by capital letters
-                        sentences = re.split(r'([.!])\s+(?=[A-Z])', all_text)
-                        # Recombine sentences with their punctuation
-                        items = []
-                        current = ""
-                        for i, part in enumerate(sentences):
-                            if part in ['.', '!']:
-                                current += part
-                                if current.strip():
-                                    items.append(current.strip())
-                                current = ""
-                            else:
-                                current += part
-                        if current.strip():
-                            items.append(current.strip())
-                        
-                        # If we got multiple items, create chunks for each
-                        if len(items) > 1:
-                            for item_text in items:
-                                if self._is_meaningful_text(item_text, min_length=20):
-                                    combined_text = item_text
-                                    if title and title not in combined_text:
-                                        combined_text = f"{title}. {combined_text}"
-                                    
-                                    chunk = {
-                                        'text': combined_text,
-                                        'type': 'card_section',
-                                        'metadata': {}
-                                    }
-                                    if title:
-                                        chunk['metadata']['title'] = title
-                                    chunks.append(chunk)
-                            continue
-                    
-                    # Single item or couldn't split meaningfully
-                    if title:
-                        combined_text = f"{title}. {' '.join(text_elements)}"
-                    else:
-                        combined_text = ' '.join(text_elements[:10])
-                else:
-                    # Fallback to full container text
-                    combined_text = container_text
-                    if title and title not in combined_text:
-                        combined_text = f"{title}. {combined_text}"
-                
-                # Clean up the text
-                combined_text = ' '.join(combined_text.split())
-                
-                if self._is_meaningful_text(combined_text, min_length=30):
-                    chunk = {
-                        'text': combined_text,
-                        'type': 'card_section',
-                        'metadata': {}
-                    }
-                    if title:
-                        chunk['metadata']['title'] = title
-                    chunks.append(chunk)
+        # Extract individual camp items
+        # Look for list items, divs with camp names, or structured content
+        camp_items = []
         
-        return chunks
-    
-    def _extract_tables(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """
-        Extract data from tables as text chunks.
-        
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of table chunks
-        """
-        chunks = []
-        for table in soup.find_all('table'):
-            table_data = []
-            
-            # Extract headers
-            headers = []
-            for th in table.find_all('th'):
-                header_text = self._extract_text_content(th)
-                if header_text:
-                    headers.append(header_text)
-            
-            # Extract rows
-            rows = table.find_all('tr')
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
-                row_data = [self._extract_text_content(cell) for cell in cells if self._extract_text_content(cell)]
-                if row_data:
-                    table_data.append(row_data)
-            
-            # Convert table to readable text
-            if headers or table_data:
-                table_text_parts = []
-                if headers:
-                    table_text_parts.append(f"Headers: {', '.join(headers)}")
-                for row in table_data[:20]:  # Limit to first 20 rows
-                    table_text_parts.append(f"Row: {', '.join(row)}")
-                
-                table_text = ' '.join(table_text_parts)
-                if self._is_meaningful_text(table_text):
-                    chunks.append({
-                        'text': table_text,
-                        'type': 'table',
-                        'metadata': {'headers': headers}
-                    })
-        
-        return chunks
-    
-    def _extract_structured_items(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """
-        Extract individual structured items with their details.
-        Dynamically identifies items with structured information (age groups, titles, etc.)
-        NO hardcoded keywords - extracts ALL structured content.
-        
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of structured item chunks
-        """
-        chunks = []
-        
-        # Find all text elements that might contain structured information
-        for elem in soup.find_all(['p', 'div', 'span', 'li', 'h2', 'h3', 'h4', 'article', 'section']):
-            text = self._extract_text_content(elem)
-            if not text or len(text) < 10:
-                continue
-            
-            # Look for age group patterns: (8+), (5-7), Ages 8+, etc.
-            # This is a structural pattern, not a keyword filter
-            age_patterns = [
-                r'\((\d+)\+?\)',  # (8+)
-                r'\((\d+)\s*(?:to|-|–|—)\s*(\d+)\)',  # (5-7), (8-14)
-                r'ages?\s+(\d+)\s*(?:to|-|–|—)?\s*(\d+)?',  # Ages 8, Ages 5-7
-                r'(\d+)\s*(?:to|-|–|—)\s*(\d+)\s*years?',  # 5-7 years
-            ]
-            
-            has_age_info = any(re.search(pattern, text, re.IGNORECASE) for pattern in age_patterns)
-            
-            # Look for price patterns: $100, $99.99, etc.
-            price_patterns = [
-                r'\$(\d+(?:,\d{3})*(?:\.\d{2})?)',  # $100, $1,000, $99.99
-            ]
-            has_price_info = any(re.search(pattern, text, re.IGNORECASE) for pattern in price_patterns)
-            
-            # Look for date/time patterns
-            date_patterns = [
-                r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)',
-                r'(january|february|march|april|may|june|july|august|september|october|november|december)',
-                r'\d{1,2}:\d{2}\s*(?:am|pm)?',
-            ]
-            has_date_info = any(re.search(pattern, text, re.IGNORECASE) for pattern in date_patterns)
-            
-            # Extract structured information if present
-            # This creates structured chunks for ANY content with structured data, not just camps
-            if has_age_info or has_price_info or has_date_info or len(text) > 50:
-                # Try to split text into individual items if it contains multiple items
-                # Look for patterns that indicate separate items:
-                # - Text ending with period/exclamation followed by new item starting with capital
-                # - Items with age groups in parentheses: "Item1 (8+). Item2 (5-7)"
-                # - Items separated by exclamation marks
-                
-                # First, try splitting by age group patterns (items often have age groups)
-                age_split_pattern = r'(?<=[.!])\s+(?=[^.!]*\([0-9])'  # Period/exclamation before text with age group
-                potential_items = re.split(age_split_pattern, text)
-                
-                if len(potential_items) > 1:
-                    valid_items = [item.strip() for item in potential_items if len(item.strip()) > 15]
-                    if len(valid_items) > 1:
-                        items = valid_items
-                    else:
-                        items = [text]
-                else:
-                    # Try other split patterns
-                    split_patterns = [
-                        r'\.\s+(?=[A-Z][^.!?]{10,})',  # Period followed by capital letter and substantial text
-                        r'!\s*(?=[A-Z])',  # Exclamation mark followed by capital
-                        r'\n+',  # Newlines
-                    ]
-                    
-                    items = [text]  # Default: treat as single item
-                    for pattern in split_patterns:
-                        potential_items = re.split(pattern, text)
-                        if len(potential_items) > 1:
-                            # Check if splits make sense (each has meaningful content)
-                            valid_items = [item.strip() for item in potential_items if len(item.strip()) > 20]
-                            if len(valid_items) > 1:
-                                items = valid_items
-                                break
-                
-                # Process each item
-                for item_text in items:
-                    item_text = item_text.strip()
-                    if not self._is_meaningful_text(item_text, min_length=20):
-                        continue
-                    
-                    # Extract age group if present
-                    age_group = None
-                    for pattern in age_patterns:
-                        match = re.search(pattern, item_text, re.IGNORECASE)
-                        if match:
-                            if match.lastindex == 2 and match.group(2):
-                                age_group = f"{match.group(1)}-{match.group(2)}"
-                            else:
-                                age_group = f"{match.group(1)}+" if '+' in match.group(0) else match.group(1)
-                            break
-                    
-                    # Extract price if present
-                    price = None
-                    for pattern in price_patterns:
-                        match = re.search(pattern, item_text, re.IGNORECASE)
-                        if match:
-                            price = f"${match.group(1)}"
-                            break
-                    
-                    # Extract title/name (text before structured info, or first sentence)
-                    item_name = None
-                    if age_group or price:
-                        # Find text before the structured pattern
-                        pattern_str = r'\(.*?\)|ages?.*?\d+|\$\d+|^\d+.*?years?'
-                        match = re.search(r'(.+?)(?:' + pattern_str + ')', item_text, re.IGNORECASE)
-                        if match:
-                            item_name = match.group(1).strip(' .,!?;:')
-                    else:
-                        # If no structured info, take first sentence or first 50 chars
-                        first_sentence = re.split(r'[.!?]', item_text)[0]
-                        if len(first_sentence) > 10 and len(first_sentence) < 100:
-                            item_name = first_sentence.strip()
-                    
-                    # Create structured chunk
-                    chunk = {
-                        'text': item_text,
-                        'type': 'structured_item',
-                        'metadata': {}
-                    }
-                    if age_group:
-                        chunk['metadata']['age_group'] = age_group
-                    if price:
-                        chunk['metadata']['price'] = price
-                    if item_name and len(item_name) > 3:
-                        chunk['metadata']['item_name'] = item_name
-                    
-                    chunks.append(chunk)
-        
-        return chunks
-    
-    def _extract_all_text_chunks(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """
-        Extract all meaningful text chunks from the page.
-        Combines headings, paragraphs, lists, cards, sections, tables, and structured items.
-        
-        Args:
-            soup: BeautifulSoup object
-            
-        Returns:
-            List[Dict[str, Any]]: List of all text chunks
-        """
-        all_chunks = []
-        
-        # Extract different types of content
-        all_chunks.extend(self._extract_headings(soup))
-        all_chunks.extend(self._extract_paragraphs(soup))
-        all_chunks.extend(self._extract_list_items(soup))
-        all_chunks.extend(self._extract_cards_and_sections(soup))
-        all_chunks.extend(self._extract_tables(soup))
-        all_chunks.extend(self._extract_structured_items(soup))  # New: structured items (dynamic, no keywords)
-        
-        # Remove duplicates (same text)
-        seen_texts = set()
-        unique_chunks = []
-        for chunk in all_chunks:
-            text_normalized = chunk['text'].lower().strip()
-            # More lenient deduplication - allow similar but not identical texts
-            # This helps preserve variations that might have different details
-            is_duplicate = False
-            for seen_text in seen_texts:
-                # Check if texts are very similar (one is subset of another)
-                if text_normalized in seen_text or seen_text in text_normalized:
-                    # If one is much longer, prefer the longer one
-                    if len(text_normalized) > len(seen_text) * 1.5:
-                        # Remove the shorter one and add this one
-                        seen_texts.discard(seen_text)
-                        unique_chunks = [c for c in unique_chunks if c['text'].lower().strip() != seen_text]
-                        break
-                    else:
-                        is_duplicate = True
-                        break
-            
-            if not is_duplicate and len(text_normalized) > 10:
-                seen_texts.add(text_normalized)
-                unique_chunks.append(chunk)
-        
-        return unique_chunks
-    
-    def scrape(self, url: str) -> List[Dict[str, Any]]:
-        """
-        Main scraping method that extracts all content as text chunks.
-        
-        Args:
-            url: URL to scrape
-            
-        Returns:
-            List[Dict[str, Any]]: List of text chunks with structure:
-                {
-                    'text': str,  # The actual text content
-                    'type': str,  # 'heading', 'paragraph', 'list_item', 'card_section', 'table'
-                    'metadata': dict  # Additional metadata (e.g., title, headers)
+        # Method 1: List items
+        for li in camps_section.find_all('li'):
+            li_text = self._extract_text_content(li)
+            if len(li_text) > 20:
+                camp_item = {
+                    "name": None,
+                    "age_range": None,
+                    "description": li_text,
+                    "duration": None,
+                    "schedule": None,
+                    "location": "TX – Alamo Ranch"
                 }
+                
+                # Extract age range
+                age_range = self._extract_age_range(li_text)
+                if age_range:
+                    camp_item["age_range"] = age_range
+                
+                # Try to extract name (text before age range or first sentence)
+                if age_range:
+                    name_match = re.search(r'(.+?)(?:\(|ages?|\d+)', li_text, re.IGNORECASE)
+                    if name_match:
+                        camp_item["name"] = name_match.group(1).strip(' .,!?;:')
+                else:
+                    # First sentence as name
+                    first_sentence = re.split(r'[.!?]', li_text)[0]
+                    if len(first_sentence) > 5 and len(first_sentence) < 100:
+                        camp_item["name"] = first_sentence.strip()
+                
+                camp_items.append(camp_item)
+        
+        # Method 2: Divs/sections that look like camp cards
+        for div in camps_section.find_all(['div', 'section', 'article']):
+            div_text = self._extract_text_content(div)
+            if len(div_text) > 30 and len(div_text) < 500:  # Reasonable size for a camp item
+                # Check if it has a heading (likely a camp name)
+                heading = div.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                if heading:
+                    heading_text = self._extract_text_content(heading)
+                    # Check if this looks like a camp item (not a section heading)
+                    if len(heading_text) < 100 and not any(word in heading_text.lower() for word in ['section', 'overview', 'about']):
+                        camp_item = {
+                            "name": heading_text,
+                            "age_range": None,
+                            "description": None,
+                            "duration": None,
+                            "schedule": None,
+                            "location": "TX – Alamo Ranch"
+                        }
+                        
+                        # Extract description (paragraphs in this div)
+                        paras = div.find_all('p')
+                        if paras:
+                            descriptions = [self._extract_text_content(p) for p in paras]
+                            camp_item["description"] = ' '.join(descriptions)
+                        else:
+                            # Use div text excluding heading
+                            desc_text = div_text.replace(heading_text, '').strip()
+                            if desc_text:
+                                camp_item["description"] = desc_text
+                        
+                        # Extract age range
+                        full_text = div_text
+                        age_range = self._extract_age_range(full_text)
+                        if age_range:
+                            camp_item["age_range"] = age_range
+                        
+                        if camp_item["description"] or camp_item["name"]:
+                            camp_items.append(camp_item)
+        
+        # Remove duplicates based on name
+        seen_names = set()
+        unique_camps = []
+        for camp in camp_items:
+            name_key = (camp.get("name") or "").lower()
+            if name_key and name_key not in seen_names:
+                seen_names.add(name_key)
+                unique_camps.append(camp)
+            elif not name_key:  # Keep items without names if they have descriptions
+                unique_camps.append(camp)
+        
+        camps_data["camps"] = unique_camps
+        
+        return camps_data
+    
+    def _extract_programs_section(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """Extract programs section with structured data."""
+        programs_data = {
+            "overview": {
+                "headline": None,
+                "summary": None
+            },
+            "programs": []
+        }
+        
+        # Find programs section
+        programs_section = self._find_section_by_heading(soup, ['program', 'programs', 'core program'])
+        
+        if not programs_section:
+            logger.warning("Could not find programs section")
+            return programs_data
+        
+        # Extract overview
+        heading = programs_section.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+        if heading:
+            programs_data["overview"]["headline"] = self._extract_text_content(heading)
+        
+        first_para = programs_section.find('p')
+        if first_para:
+            summary = self._extract_text_content(first_para)
+            if len(summary) > 50:
+                programs_data["overview"]["summary"] = summary
+        
+        # Extract individual programs (similar to camps)
+        program_items = []
+        
+        for li in programs_section.find_all('li'):
+            li_text = self._extract_text_content(li)
+            if len(li_text) > 20:
+                program_item = {
+                    "name": None,
+                    "age_range": None,
+                    "description": li_text
+                }
+                
+                age_range = self._extract_age_range(li_text)
+                if age_range:
+                    program_item["age_range"] = age_range
+                
+                # Extract name
+                if age_range:
+                    name_match = re.search(r'(.+?)(?:\(|ages?|\d+)', li_text, re.IGNORECASE)
+                    if name_match:
+                        program_item["name"] = name_match.group(1).strip(' .,!?;:')
+                else:
+                    first_sentence = re.split(r'[.!?]', li_text)[0]
+                    if len(first_sentence) > 5 and len(first_sentence) < 100:
+                        program_item["name"] = first_sentence.strip()
+                
+                program_items.append(program_item)
+        
+        # Also check divs/sections
+        for div in programs_section.find_all(['div', 'section', 'article']):
+            div_text = self._extract_text_content(div)
+            if 30 < len(div_text) < 500:
+                heading = div.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                if heading:
+                    heading_text = self._extract_text_content(heading)
+                    if len(heading_text) < 100:
+                        program_item = {
+                            "name": heading_text,
+                            "age_range": None,
+                            "description": None
+                        }
+                        
+                        paras = div.find_all('p')
+                        if paras:
+                            program_item["description"] = ' '.join([self._extract_text_content(p) for p in paras])
+                        else:
+                            desc_text = div_text.replace(heading_text, '').strip()
+                            if desc_text:
+                                program_item["description"] = desc_text
+                        
+                        age_range = self._extract_age_range(div_text)
+                        if age_range:
+                            program_item["age_range"] = age_range
+                        
+                        if program_item["description"] or program_item["name"]:
+                            program_items.append(program_item)
+        
+        # Remove duplicates
+        seen_names = set()
+        unique_programs = []
+        for program in program_items:
+            name_key = (program.get("name") or "").lower()
+            if name_key and name_key not in seen_names:
+                seen_names.add(name_key)
+                unique_programs.append(program)
+            elif not name_key:
+                unique_programs.append(program)
+        
+        programs_data["programs"] = unique_programs
+        
+        return programs_data
+    
+    def _extract_additional_programs_section(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """Extract additional/other programs section."""
+        additional_data = {
+            "overview": {
+                "headline": None,
+                "summary": None
+            },
+            "programs": []
+        }
+        
+        # Find additional programs section
+        additional_section = self._find_section_by_heading(
+            soup, 
+            ['additional', 'other program', 'parent', 'birthday', 'party', 'night out']
+        )
+        
+        if not additional_section:
+            logger.warning("Could not find additional programs section")
+            return additional_data
+        
+        # Extract overview
+        heading = additional_section.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+        if heading:
+            additional_data["overview"]["headline"] = self._extract_text_content(heading)
+        
+        first_para = additional_section.find('p')
+        if first_para:
+            summary = self._extract_text_content(first_para)
+            if len(summary) > 50:
+                additional_data["overview"]["summary"] = summary
+        
+        # Extract programs (same logic as programs section)
+        program_items = []
+        
+        for li in additional_section.find_all('li'):
+            li_text = self._extract_text_content(li)
+            if len(li_text) > 20:
+                program_item = {
+                    "name": None,
+                    "age_range": None,
+                    "description": li_text
+                }
+                
+                age_range = self._extract_age_range(li_text)
+                if age_range:
+                    program_item["age_range"] = age_range
+                
+                if age_range:
+                    name_match = re.search(r'(.+?)(?:\(|ages?|\d+)', li_text, re.IGNORECASE)
+                    if name_match:
+                        program_item["name"] = name_match.group(1).strip(' .,!?;:')
+                else:
+                    first_sentence = re.split(r'[.!?]', li_text)[0]
+                    if len(first_sentence) > 5 and len(first_sentence) < 100:
+                        program_item["name"] = first_sentence.strip()
+                
+                program_items.append(program_item)
+        
+        for div in additional_section.find_all(['div', 'section', 'article']):
+            div_text = self._extract_text_content(div)
+            if 30 < len(div_text) < 500:
+                heading = div.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                if heading:
+                    heading_text = self._extract_text_content(heading)
+                    if len(heading_text) < 100:
+                        program_item = {
+                            "name": heading_text,
+                            "age_range": None,
+                            "description": None
+                        }
+                        
+                        paras = div.find_all('p')
+                        if paras:
+                            program_item["description"] = ' '.join([self._extract_text_content(p) for p in paras])
+                        else:
+                            desc_text = div_text.replace(heading_text, '').strip()
+                            if desc_text:
+                                program_item["description"] = desc_text
+                        
+                        age_range = self._extract_age_range(div_text)
+                        if age_range:
+                            program_item["age_range"] = age_range
+                        
+                        if program_item["description"] or program_item["name"]:
+                            program_items.append(program_item)
+        
+        # Remove duplicates
+        seen_names = set()
+        unique_programs = []
+        for program in program_items:
+            name_key = (program.get("name") or "").lower()
+            if name_key and name_key not in seen_names:
+                seen_names.add(name_key)
+                unique_programs.append(program)
+            elif not name_key:
+                unique_programs.append(program)
+        
+        additional_data["programs"] = unique_programs
+        
+        return additional_data
+    
+    def scrape(self, url: str) -> Dict[str, Any]:
+        """
+        Main scraping method that extracts structured data.
+        
+        Returns:
+            Dict with keys: 'camps', 'programs', 'additional_programs'
         """
         html = self.fetch_html(url)
         if not html:
             logger.error(f"Failed to fetch HTML from {url}")
-            return []
+            return {
+                "camps": {"overview": {}, "camps": []},
+                "programs": {"overview": {}, "programs": []},
+                "additional_programs": {"overview": {}, "programs": []}
+            }
         
         soup = self.parse_html(html)
         self._remove_unwanted_elements(soup)
         
-        # Extract all text chunks
-        chunks = self._extract_all_text_chunks(soup)
+        # Extract structured data for each category
+        camps_data = self._extract_camps_section(soup)
+        programs_data = self._extract_programs_section(soup)
+        additional_data = self._extract_additional_programs_section(soup)
         
-        logger.info(f"Successfully scraped {url}: extracted {len(chunks)} text chunks")
+        result = {
+            "camps": camps_data,
+            "programs": programs_data,
+            "additional_programs": additional_data
+        }
         
-        return chunks
-
+        logger.info(f"Scraped {url}: "
+                   f"{len(camps_data['camps'])} camps, "
+                   f"{len(programs_data['programs'])} programs, "
+                   f"{len(additional_data['programs'])} additional programs")
+        
+        return result

@@ -1,150 +1,101 @@
 """
-Main chatbot orchestrator that coordinates scraper, cleaner, embeddings, and query engine.
-This is the main interface for the dynamic scraping chatbot system.
+Main chatbot orchestrator for structured scraping and querying.
+Coordinates scraper and query engine to provide clean, structured answers.
 """
 import logging
-from typing import Dict, Any, Optional, List
-from pathlib import Path
+from typing import Dict, Any, Optional
 
-from scraper import DynamicScraper
-from cleaner import TextCleaner
-from embeddings import load_or_build_vector_store, get_embeddings
-from query_engine import DynamicQueryEngine
-
-from langchain_community.vectorstores import FAISS
+from scraper import StructuredScraper
+from query_engine import StructuredQueryEngine
 
 logger = logging.getLogger(__name__)
 
 
-class DynamicChatbot:
+class StructuredChatbot:
     """
-    Main chatbot class that orchestrates scraping, cleaning, embedding, and query answering.
-    Fully dynamic - no hardcoded keywords or categories.
+    Main chatbot class that orchestrates structured scraping and query answering.
+    Returns clean, structured JSON responses.
     """
     
-    def __init__(
-        self, 
-        base_url: Optional[str] = None,
-        vector_store_path: Optional[str] = None,
-        use_cache: bool = True
-    ):
+    def __init__(self, base_url: Optional[str] = None, use_cache: bool = True):
         """
-        Initialize the dynamic chatbot.
+        Initialize the structured chatbot.
         
         Args:
             base_url: Optional base URL for scraping
-            vector_store_path: Optional path to save/load vector store
-            use_cache: Whether to use cached vector store if available
+            use_cache: Whether to cache scraped data (not implemented yet)
         """
-        self.scraper = DynamicScraper()
-        self.cleaner = TextCleaner()
+        self.scraper = StructuredScraper()
+        self.query_engine = StructuredQueryEngine()
         self.base_url = base_url
-        self.vector_store_path = vector_store_path
         self.use_cache = use_cache
-        self._vector_store: Optional[FAISS] = None
-        self._chunks: List[Dict[str, Any]] = []
-        self._query_engine: Optional[DynamicQueryEngine] = None
+        self._cached_data: Dict[str, Dict[str, Any]] = {}
     
-    def scrape_and_prepare(self, url: Optional[str] = None) -> List[Dict[str, Any]]:
+    def scrape_website(self, url: Optional[str] = None) -> Dict[str, Any]:
         """
-        Scrape website, clean chunks, and prepare vector store.
+        Scrape website and return structured data.
         
         Args:
             url: URL to scrape (uses base_url if not provided)
             
         Returns:
-            List[Dict[str, Any]]: List of cleaned text chunks
+            Dict with structured data: 'camps', 'programs', 'additional_programs'
         """
-        # Determine URL
         if not url:
             if not self.base_url:
                 raise ValueError("No URL provided and base_url not set")
             url = self.base_url
         
+        # Check cache
+        if self.use_cache and url in self._cached_data:
+            logger.info(f"Using cached data for {url}")
+            return self._cached_data[url]
+        
         logger.info(f"Scraping website: {url}")
+        structured_data = self.scraper.scrape(url)
         
-        # Scrape
-        raw_chunks = self.scraper.scrape(url)
+        # Cache
+        if self.use_cache:
+            self._cached_data[url] = structured_data
         
-        if not raw_chunks:
-            logger.warning(f"No chunks extracted from {url}")
-            return []
-        
-        # Clean chunks
-        cleaned_chunks = self.cleaner.clean_chunks(raw_chunks)
-        
-        self._chunks = cleaned_chunks
-        
-        logger.info(f"Prepared {len(cleaned_chunks)} cleaned chunks")
-        
-        return cleaned_chunks
-    
-    def build_vector_store(self, chunks: Optional[List[Dict[str, Any]]] = None) -> FAISS:
-        """
-        Build or load vector store from chunks.
-        
-        Args:
-            chunks: Optional list of chunks (uses self._chunks if not provided)
-            
-        Returns:
-            FAISS: Vector store
-        """
-        if chunks is None:
-            chunks = self._chunks
-        
-        if not chunks:
-            raise ValueError("No chunks available. Call scrape_and_prepare() first.")
-        
-        logger.info(f"Building vector store from {len(chunks)} chunks")
-        
-        # Load or build vector store
-        self._vector_store = load_or_build_vector_store(
-            chunks,
-            vector_store_path=self.vector_store_path if self.use_cache else None
-        )
-        
-        # Initialize query engine
-        self._query_engine = DynamicQueryEngine(
-            vector_store=self._vector_store,
-            embeddings=get_embeddings()
-        )
-        
-        return self._vector_store
+        return structured_data
     
     def answer_query(
-        self, 
+        self,
         query: str,
         url: Optional[str] = None,
-        top_k: int = 15,  # Increased for more comprehensive answers
-        similarity_threshold: float = 0.2  # Lower threshold to get more matches
+        location: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Answer a user query by scraping (if needed) and using semantic search.
+        Answer a user query using structured data.
         
         Args:
             query: User query string
             url: Optional URL to scrape (uses base_url if not provided)
-            top_k: Number of top chunks to retrieve
-            similarity_threshold: Minimum similarity score (0-1)
+            location: Optional location string (e.g., "cn-tx-alamo-ranch")
             
         Returns:
-            Dict[str, Any]: Structured response with answer
+            Dict with structured answer
         """
         try:
-            # Scrape and prepare if needed
-            if not self._chunks or url:
-                self.scrape_and_prepare(url)
+            # Scrape website if needed
+            structured_data = self.scrape_website(url)
             
-            # Build vector store if needed
-            if not self._vector_store or not self._query_engine:
-                self.build_vector_store()
+            # Extract location from location string if provided
+            location_display = None
+            if location:
+                # Convert "cn-tx-alamo-ranch" to "TX – Alamo Ranch"
+                location_parts = location.replace('cn-', '').split('-')
+                if len(location_parts) >= 2:
+                    state = location_parts[0].upper()
+                    city_parts = location_parts[1:]
+                    city = ' '.join(word.capitalize() for word in city_parts)
+                    location_display = f"{state} – {city}"
+                else:
+                    location_display = location.replace('-', ' ').title()
             
-            # Answer query using semantic search
-            response = self._query_engine.answer_query(
-                query,
-                top_k=top_k,
-                similarity_threshold=similarity_threshold
-            )
+            # Answer query using structured data
+            response = self.query_engine.answer_query(query, structured_data, location_display)
             
             return response
         
@@ -153,51 +104,39 @@ class DynamicChatbot:
             return {
                 "status": "error",
                 "query": query,
-                "chunks": [],
-                "formatted": f"I'm sorry, I encountered an error processing your query: {str(e)}"
+                "answer": {
+                    "category": "error",
+                    "message": f"I'm sorry, I encountered an error processing your query: {str(e)}"
+                }
             }
     
-    def get_chunks(self) -> List[Dict[str, Any]]:
-        """
-        Get the current list of chunks.
-        
-        Returns:
-            List[Dict[str, Any]]: List of text chunks
-        """
-        return self._chunks
-    
     def clear_cache(self) -> None:
-        """Clear cached vector store and chunks."""
-        self._vector_store = None
-        self._chunks = []
-        self._query_engine = None
+        """Clear cached scraped data."""
+        self._cached_data.clear()
         logger.info("Cache cleared")
 
 
 def answer_query(
-    query: str, 
+    query: str,
     url: str,
-    vector_store_path: Optional[str] = None,
-    top_k: int = 5,
-    similarity_threshold: float = 0.3
+    location: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Convenience function to answer a query using the dynamic chatbot.
+    Convenience function to answer a query using the structured chatbot.
     
     Args:
         query: User query string
         url: URL to scrape
-        vector_store_path: Optional path to save/load vector store
-        top_k: Number of top chunks to retrieve
-        similarity_threshold: Minimum similarity score (0-1)
+        location: Optional location string
         
     Returns:
-        Dict[str, Any]: Structured response with answer
+        Dict with structured answer
         
     Example:
-        >>> response = answer_query("What camps do you offer?", url="https://example.com")
-        >>> print(response['formatted'])
+        >>> response = answer_query("Know more about CAMPS", 
+        ...                        url="https://codeninjas-39646145.hs-sites.com/tx-alamo-ranch/",
+        ...                        location="cn-tx-alamo-ranch")
+        >>> print(response['answer']['items'])
     """
-    chatbot = DynamicChatbot(base_url=url, vector_store_path=vector_store_path)
-    return chatbot.answer_query(query, top_k=top_k, similarity_threshold=similarity_threshold)
-
+    chatbot = StructuredChatbot(base_url=url)
+    return chatbot.answer_query(query, location=location)
