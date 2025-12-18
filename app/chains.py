@@ -106,19 +106,26 @@ class FAQRetriever:
         
         # Add items
         if items:
-            answer_parts.append(f"\n**Available {category.upper() if category != 'general' else 'Options'}:**")
+            category_label = "CAMPS" if category == "camps" else "PROGRAMS" if category == "programs" else "ADDITIONAL PROGRAMS" if category == "additional_programs" else "OPTIONS"
+            answer_parts.append(f"\n**Available {category_label}:**")
             for item in items:
                 item_parts = []
                 if item.get("name"):
                     item_parts.append(f"**{item['name']}**")
                 if item.get("age_range"):
                     item_parts.append(f"(Ages {item['age_range']})")
+                if item.get("price"):
+                    item_parts.append(f"- {item['price']}")
+                if item.get("duration"):
+                    item_parts.append(f"\n  Dates: {item['duration']}")
+                if item.get("schedule"):
+                    item_parts.append(f"\n  Time: {item['schedule']}")
                 if item.get("description"):
                     desc = item['description']
                     # Limit description length
-                    if len(desc) > 200:
-                        desc = desc[:200] + "..."
-                    item_parts.append(desc)
+                    if len(desc) > 300:
+                        desc = desc[:300] + "..."
+                    item_parts.append(f"\n  {desc}")
                 
                 if item_parts:
                     answer_parts.append("\n" + " ".join(item_parts))

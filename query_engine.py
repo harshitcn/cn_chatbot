@@ -65,15 +65,17 @@ class StructuredQueryEngine:
             sentences = overview["summary"].split('. ')
             answer["highlights"] = [s.strip() + '.' for s in sentences[:3] if s.strip()]
         
-        # Format camp items
+        # Format camp items - include all available fields
         camps = camps_data.get("camps", [])
         for camp in camps:
             item = {
                 "name": camp.get("name", "Camp"),
                 "age_range": camp.get("age_range"),
                 "description": camp.get("description"),
+                "price": camp.get("price"),
                 "duration": camp.get("duration"),
-                "schedule": camp.get("schedule")
+                "schedule": camp.get("schedule"),
+                "location": camp.get("location", location or "TX – Alamo Ranch")
             }
             # Remove None values
             item = {k: v for k, v in item.items() if v is not None}
