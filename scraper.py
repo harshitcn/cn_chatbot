@@ -188,6 +188,7 @@ class DynamicScraper:
     def _extract_list_items(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """
         Extract all list items as chunks.
+        Each list item is treated as a separate chunk to preserve individual items.
         
         Args:
             soup: BeautifulSoup object
@@ -198,18 +199,32 @@ class DynamicScraper:
         chunks = []
         for li in soup.find_all('li'):
             text = self._extract_text_content(li)
-            if self._is_meaningful_text(text):
+            if self._is_meaningful_text(text, min_length=10):
+                # Try to extract structured info from list item
+                metadata = {}
+                
+                # Look for age groups, prices, etc. in the list item
+                age_match = re.search(r'\((\d+)\+?\)|\((\d+)\s*(?:to|-|–|—)\s*(\d+)\)|ages?\s+(\d+)', text, re.IGNORECASE)
+                if age_match:
+                    if age_match.group(3):  # Range like (5-7)
+                        metadata['age_group'] = f"{age_match.group(2)}-{age_match.group(3)}"
+                    elif age_match.group(1):  # Single like (8+)
+                        metadata['age_group'] = f"{age_match.group(1)}+"
+                    elif age_match.group(4):  # Ages 8
+                        metadata['age_group'] = age_match.group(4)
+                
                 chunks.append({
                     'text': text,
                     'type': 'list_item',
-                    'metadata': {}
+                    'metadata': metadata
                 })
         return chunks
     
     def _extract_cards_and_sections(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """
         Extract content from cards, sections, articles, and divs.
-        Improved to extract individual camp/program cards with their details.
+        Improved to extract individual items from containers.
+        Tries to split containers into individual items when possible.
         
         Args:
             soup: BeautifulSoup object
@@ -231,15 +246,14 @@ class DynamicScraper:
                 continue
             
             # Check if container has substantial content (structural check, not keyword-based)
-            # A container is meaningful if it has:
-            # - A heading/title
-            # - Multiple text elements
-            # - Substantial text content
             has_heading = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) is not None
             has_multiple_elements = len(container.find_all(['p', 'span', 'div', 'li'])) > 1
             has_substantial_text = len(container_text) > 50
             
             is_meaningful_container = has_heading or has_multiple_elements or has_substantial_text
+            
+            if not is_meaningful_container:
+                continue
             
             # Try to find a title/heading within the container
             title = None
@@ -247,65 +261,121 @@ class DynamicScraper:
             if title_elem:
                 title = self._extract_text_content(title_elem)
             
-            # For meaningful containers, extract structured information
-            if is_meaningful_container or title:
+            # Check if container has direct child elements that might be individual items
+            # Look for direct children that are paragraphs, divs, or spans with substantial content
+            direct_children = [child for child in container.children if isinstance(child, Tag)]
+            
+            # If container has multiple direct children with substantial text, treat each as separate item
+            individual_items = []
+            for child in direct_children:
+                # Skip nested containers (they'll be processed separately)
+                if child.name in ['section', 'article']:
+                    continue
+                
+                child_text = self._extract_text_content(child)
+                if self._is_meaningful_text(child_text, min_length=20):
+                    # Check if this child looks like a separate item
+                    # (has its own structure, or is a substantial standalone element)
+                    has_own_structure = child.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b']) is not None
+                    is_substantial = len(child_text) > 50
+                    
+                    if has_own_structure or is_substantial:
+                        individual_items.append({
+                            'text': child_text,
+                            'title': title if title and title in child_text else None
+                        })
+            
+            # If we found individual items, create chunks for each
+            if len(individual_items) > 1:
+                for item in individual_items:
+                    combined_text = item['text']
+                    if item['title'] and item['title'] not in combined_text:
+                        combined_text = f"{item['title']}. {combined_text}"
+                    
+                    chunk = {
+                        'text': combined_text,
+                        'type': 'card_section',
+                        'metadata': {}
+                    }
+                    if item['title']:
+                        chunk['metadata']['title'] = item['title']
+                    chunks.append(chunk)
+            else:
+                # Single item or no clear separation - extract as one chunk
                 # Extract all text elements in order, preserving structure
                 text_elements = []
                 
-                # Get all direct text and child elements
-                for elem in container.find_all(['p', 'span', 'div', 'li', 'strong', 'em', 'b', 'i']):
+                # Get direct text nodes and immediate children
+                for elem in container.find_all(['p', 'span', 'div', 'li', 'strong', 'em', 'b', 'i'], recursive=False):
                     elem_text = self._extract_text_content(elem)
                     if elem_text and len(elem_text.strip()) > 5:
-                        # Avoid duplicates by checking if text is already in parent
-                        parent_text = self._extract_text_content(elem.parent) if elem.parent else ""
-                        if elem_text not in parent_text or len(elem_text) < len(parent_text) * 0.8:
-                            text_elements.append(elem_text)
+                        text_elements.append(elem_text)
                 
                 # If we found structured elements, use them
                 if text_elements:
-                    # Combine with title if available
+                    # Try to split if text contains multiple sentences that might be separate items
+                    # Look for patterns like "Item1. Item2! Item3" where each might be a separate item
+                    all_text = ' '.join(text_elements)
+                    
+                    # Split by sentence boundaries if text is long and has multiple sentences
+                    if len(all_text) > 100 and all_text.count('.') + all_text.count('!') > 2:
+                        # Try splitting by periods/exclamation marks followed by capital letters
+                        sentences = re.split(r'([.!])\s+(?=[A-Z])', all_text)
+                        # Recombine sentences with their punctuation
+                        items = []
+                        current = ""
+                        for i, part in enumerate(sentences):
+                            if part in ['.', '!']:
+                                current += part
+                                if current.strip():
+                                    items.append(current.strip())
+                                current = ""
+                            else:
+                                current += part
+                        if current.strip():
+                            items.append(current.strip())
+                        
+                        # If we got multiple items, create chunks for each
+                        if len(items) > 1:
+                            for item_text in items:
+                                if self._is_meaningful_text(item_text, min_length=20):
+                                    combined_text = item_text
+                                    if title and title not in combined_text:
+                                        combined_text = f"{title}. {combined_text}"
+                                    
+                                    chunk = {
+                                        'text': combined_text,
+                                        'type': 'card_section',
+                                        'metadata': {}
+                                    }
+                                    if title:
+                                        chunk['metadata']['title'] = title
+                                    chunks.append(chunk)
+                            continue
+                    
+                    # Single item or couldn't split meaningfully
                     if title:
                         combined_text = f"{title}. {' '.join(text_elements)}"
                     else:
-                        combined_text = ' '.join(text_elements[:10])  # Limit to avoid too long
+                        combined_text = ' '.join(text_elements[:10])
                 else:
                     # Fallback to full container text
                     combined_text = container_text
                     if title and title not in combined_text:
                         combined_text = f"{title}. {combined_text}"
-            else:
-                # For non-card containers, extract main content (excluding nested containers)
-                content_parts = []
-                if title:
-                    content_parts.append(title)
                 
-                for child in container.children:
-                    if isinstance(child, Tag):
-                        # Skip nested containers
-                        if child.name in ['section', 'article', 'div']:
-                            continue
-                        child_text = self._extract_text_content(child)
-                        if child_text and len(child_text) > 20:
-                            content_parts.append(child_text)
+                # Clean up the text
+                combined_text = ' '.join(combined_text.split())
                 
-                # Combine content
-                if content_parts:
-                    combined_text = ' '.join(content_parts)
-                else:
-                    combined_text = container_text
-            
-            # Clean up the text
-            combined_text = ' '.join(combined_text.split())  # Normalize whitespace
-            
-            if self._is_meaningful_text(combined_text, min_length=30):
-                chunk = {
-                    'text': combined_text,
-                    'type': 'card_section',
-                    'metadata': {}
-                }
-                if title:
-                    chunk['metadata']['title'] = title
-                chunks.append(chunk)
+                if self._is_meaningful_text(combined_text, min_length=30):
+                    chunk = {
+                        'text': combined_text,
+                        'type': 'card_section',
+                        'metadata': {}
+                    }
+                    if title:
+                        chunk['metadata']['title'] = title
+                    chunks.append(chunk)
         
         return chunks
     
@@ -405,22 +475,38 @@ class DynamicScraper:
             # This creates structured chunks for ANY content with structured data, not just camps
             if has_age_info or has_price_info or has_date_info or len(text) > 50:
                 # Try to split text into individual items if it contains multiple items
-                # Split by common delimiters that indicate separate items
-                split_patterns = [
-                    r'\.\s+(?=[A-Z][^.!?]{10,})',  # Period followed by capital letter and substantial text
-                    r'!\s*(?=[A-Z])',  # Exclamation mark followed by capital
-                    r'\n+',  # Newlines
-                ]
+                # Look for patterns that indicate separate items:
+                # - Text ending with period/exclamation followed by new item starting with capital
+                # - Items with age groups in parentheses: "Item1 (8+). Item2 (5-7)"
+                # - Items separated by exclamation marks
                 
-                items = [text]  # Default: treat as single item
-                for pattern in split_patterns:
-                    potential_items = re.split(pattern, text)
-                    if len(potential_items) > 1:
-                        # Check if splits make sense (each has meaningful content)
-                        valid_items = [item.strip() for item in potential_items if len(item.strip()) > 20]
-                        if len(valid_items) > 1:
-                            items = valid_items
-                            break
+                # First, try splitting by age group patterns (items often have age groups)
+                age_split_pattern = r'(?<=[.!])\s+(?=[^.!]*\([0-9])'  # Period/exclamation before text with age group
+                potential_items = re.split(age_split_pattern, text)
+                
+                if len(potential_items) > 1:
+                    valid_items = [item.strip() for item in potential_items if len(item.strip()) > 15]
+                    if len(valid_items) > 1:
+                        items = valid_items
+                    else:
+                        items = [text]
+                else:
+                    # Try other split patterns
+                    split_patterns = [
+                        r'\.\s+(?=[A-Z][^.!?]{10,})',  # Period followed by capital letter and substantial text
+                        r'!\s*(?=[A-Z])',  # Exclamation mark followed by capital
+                        r'\n+',  # Newlines
+                    ]
+                    
+                    items = [text]  # Default: treat as single item
+                    for pattern in split_patterns:
+                        potential_items = re.split(pattern, text)
+                        if len(potential_items) > 1:
+                            # Check if splits make sense (each has meaningful content)
+                            valid_items = [item.strip() for item in potential_items if len(item.strip()) > 20]
+                            if len(valid_items) > 1:
+                                items = valid_items
+                                break
                 
                 # Process each item
                 for item_text in items:
