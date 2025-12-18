@@ -5,7 +5,7 @@ Coordinates scraper and query engine to provide clean, structured answers.
 import logging
 from typing import Dict, Any, Optional
 
-from scraper import StructuredScraper
+from scraper import HubSpotScraper
 from query_engine import StructuredQueryEngine
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class StructuredChatbot:
             base_url: Optional base URL for scraping
             use_cache: Whether to cache scraped data (not implemented yet)
         """
-        self.scraper = StructuredScraper()
+        self.scraper = HubSpotScraper()
         self.query_engine = StructuredQueryEngine()
         self.base_url = base_url
         self.use_cache = use_cache
