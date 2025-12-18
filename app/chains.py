@@ -13,7 +13,17 @@ from app.predefined_qa import get_predefined_answer, normalize_question
 from app.utils.embeddings import load_or_build_faiss_index, get_embeddings
 from app.utils.location_detector import LocationDetector
 from app.utils.location_api import LocationAPIClient
-from app.utils.web_scraper import WebScraper
+import asyncio
+import sys
+from pathlib import Path
+
+# Import the new dynamic chatbot system
+# Add root directory to path to import the new modules
+root_dir = Path(__file__).parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
+from chatbot import DynamicChatbot
 
 
 class FAQRetriever:
@@ -42,7 +52,7 @@ class FAQRetriever:
         self.vector_store: Optional[FAISS] = None
         self.location_detector = LocationDetector()
         self.location_api_client = LocationAPIClient()
-        self.web_scraper = WebScraper()
+        self.dynamic_chatbot: Optional[DynamicChatbot] = None
         self._initialize_vector_store()
     
     def _initialize_vector_store(self):
@@ -314,11 +324,14 @@ class FAQRetriever:
         if location_slug:
             location_name = location_slug
             use_slug_directly = True
-            logger.info(f"Using provided location_slug: '{location_slug}'")
+            logger.info(f"Using provided location_slug: '{location_slug}' -> location_name: '{location_name}'")
         else:
             location_name = self.location_detector.extract_location(question)
             if location_name:
                 logger.info(f"Location detected from question: '{location_name}'")
+        
+        # Log location state before Tier 3
+        logger.info(f"Before Tier 3: location_slug='{location_slug}', location_name='{location_name}', use_slug_directly={use_slug_directly}")
         
         vector_store = self.vector_store
         
@@ -489,37 +502,121 @@ class FAQRetriever:
         
         # TIER 3: Scrape website for general queries (not just locations)
         # Prioritize location-based scraping if location_slug is provided or location detected
-        if location_name:
+        # IMPORTANT: Use location_slug directly if provided, as it's the source of truth
+        location_for_tier3 = location_slug if location_slug else location_name
+        
+        logger.info(f"Tier 3: location_slug='{location_slug}', location_name='{location_name}', location_for_tier3='{location_for_tier3}'")
+        
+        if location_for_tier3:
             # If location_slug was provided, prioritize scraping for that location
-            if use_slug_directly:
+            if location_slug:
                 logger.info(f"Tier 3a: Attempting to scrape website for location slug '{location_slug}' (priority)...")
             else:
                 logger.info(f"Tier 3a: Attempting to scrape website for location '{location_name}'...")
             
             try:
-                # Use the location name/slug for scraping
-                scraped_answer = await self.web_scraper.scrape_and_extract_answer(location_name, question)
-                if scraped_answer:
-                    logger.info(f"Successfully scraped content for location '{location_name}'")
-                    return scraped_answer
+                # Use the location slug/name for scraping - use location_slug if available, otherwise location_name
+                location_to_use = location_slug if location_slug else location_name
+                
+                # For camp-related queries, try comprehensive scraper first for better structured data
+                question_lower = question.lower()
+                is_camp_query = 'camp' in question_lower
+                
+                # Use the new dynamic chatbot system for scraping
+                if self.dynamic_chatbot is None:
+                    # Initialize dynamic chatbot (lazy initialization)
+                    from app.config import get_settings
+                    settings = get_settings()
+                    base_url = getattr(settings, 'scrape_base_url', None)
+                    if base_url:
+                        # Construct URL from location
+                        location_slug_clean = location_to_use.replace('cn-', '') if location_to_use.startswith('cn-') else location_to_use
+                        url = f"{base_url.rstrip('/')}/{location_slug_clean}/"
+                        self.dynamic_chatbot = DynamicChatbot(base_url=url, use_cache=True)
+                    else:
+                        logger.warning("scrape_base_url not configured, cannot use dynamic scraper")
+                
+                if self.dynamic_chatbot:
+                    # Run synchronous answer_query in executor to avoid blocking
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self.dynamic_chatbot.answer_query(question)
+                    )
+                    
+                    if response.get('status') == 'success' and response.get('formatted'):
+                        logger.info(f"Successfully got answer from dynamic scraper for location '{location_to_use}'")
+                        return response['formatted']
+                    else:
+                        logger.warning(f"Dynamic scraper did not find answer for location '{location_to_use}'")
                 else:
-                    logger.warning(f"Could not scrape content for location '{location_name}', trying general scraping...")
+                    logger.warning(f"Dynamic chatbot not initialized, cannot scrape for location '{location_to_use}'")
             except Exception as e:
-                logger.warning(f"Error scraping website for location '{location_name}': {str(e)}, trying general scraping...")
+                logger.warning(f"Error scraping website for location '{location_to_use}': {str(e)}, trying general scraping...")
+        else:
+            logger.info("Tier 3: No location provided, skipping location-based scraping")
         
         # Try general web scraping for any query (only if location scraping failed or no location)
         logger.info("Tier 3b: Attempting general web scraping...")
         try:
-            # Try to scrape based on the question itself
-            # Extract key terms from the question for searching
-            scraped_answer = await self.web_scraper.scrape_general_query(question)
-            if scraped_answer:
-                logger.info("Successfully scraped content from general query")
-                return scraped_answer
+            # Initialize dynamic chatbot with base URL if not already initialized
+            if self.dynamic_chatbot is None:
+                from app.config import get_settings
+                settings = get_settings()
+                base_url = getattr(settings, 'scrape_base_url', None)
+                if base_url:
+                    self.dynamic_chatbot = DynamicChatbot(base_url=base_url, use_cache=True)
+            
+            if self.dynamic_chatbot:
+                # Run synchronous answer_query in executor
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.dynamic_chatbot.answer_query(question)
+                )
+                
+                if response.get('status') == 'success' and response.get('formatted'):
+                    logger.info("Successfully scraped content from general query")
+                    return response['formatted']
+                else:
+                    logger.warning("Dynamic scraper did not find answer for general query")
             else:
-                logger.warning("Could not scrape content from general query")
+                logger.warning("Dynamic chatbot not initialized, cannot scrape general query")
         except Exception as e:
             logger.warning(f"Error during general web scraping: {str(e)}")
+        
+        # TIER 3c: Try dynamic scraper as final fallback
+        logger.info("Tier 3c: Attempting dynamic scraper as final fallback...")
+        try:
+            # Use location_slug if provided, otherwise use location_name
+            location_for_scraping = location_slug if location_slug else location_name
+            
+            # Initialize with location-specific URL if location available
+            if location_for_scraping and self.dynamic_chatbot is None:
+                from app.config import get_settings
+                settings = get_settings()
+                base_url = getattr(settings, 'scrape_base_url', None)
+                if base_url:
+                    location_slug_clean = location_for_scraping.replace('cn-', '') if location_for_scraping.startswith('cn-') else location_for_scraping
+                    url = f"{base_url.rstrip('/')}/{location_slug_clean}/"
+                    self.dynamic_chatbot = DynamicChatbot(base_url=url, use_cache=True)
+            
+            if self.dynamic_chatbot:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.dynamic_chatbot.answer_query(question)
+                )
+                
+                if response.get('status') == 'success' and response.get('formatted'):
+                    logger.info("Successfully got answer from dynamic scraper")
+                    return response['formatted']
+                else:
+                    logger.warning("Dynamic scraper did not find answer")
+            else:
+                logger.warning("Dynamic chatbot not initialized, cannot use dynamic scraper")
+        except Exception as e:
+            logger.warning(f"Error during dynamic scraping: {str(e)}")
         
         # If all tiers fail, return default response
         logger.info("All tiers exhausted, returning default response")
