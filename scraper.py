@@ -106,28 +106,69 @@ class StructuredScraper:
         """
         Find a section by looking for headings containing specific keywords.
         Returns the section container that follows the heading.
+        Improved to be more flexible and find sections in different structures.
         """
+        # Try multiple strategies to find the section
+        
+        # Strategy 1: Find heading with keywords
         for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
             heading_text = self._extract_text_content(heading).lower()
             if any(keyword.lower() in heading_text for keyword in heading_keywords):
-                # Find the parent container (section, article, or div)
+                # Find the parent container
                 parent = heading.parent
-                while parent and parent.name not in ['section', 'article', 'div', 'body']:
+                depth = 0
+                while parent and parent.name not in ['section', 'article', 'div', 'body'] and depth < 5:
                     parent = parent.parent
+                    depth += 1
                 
                 if parent and parent.name != 'body':
-                    return parent
+                    # Check if this container has substantial content
+                    text = self._extract_text_content(parent)
+                    if len(text) > 50:
+                        return parent
                 
-                # If no container found, look for next sibling section
+                # Strategy 1a: Look for next sibling
                 next_sibling = heading.find_next_sibling(['section', 'article', 'div'])
                 if next_sibling:
-                    return next_sibling
-                
-                # Look for parent's next sibling
-                if parent:
-                    next_sibling = parent.find_next_sibling(['section', 'article', 'div'])
-                    if next_sibling:
+                    text = self._extract_text_content(next_sibling)
+                    if len(text) > 50:
                         return next_sibling
+                
+                # Strategy 1b: Look for next element (any tag)
+                next_elem = heading.find_next(['section', 'article', 'div'])
+                if next_elem and next_elem != heading:
+                    text = self._extract_text_content(next_elem)
+                    if len(text) > 50:
+                        return next_elem
+                
+                # Strategy 1c: Get parent and include following siblings
+                if parent and parent.name != 'body':
+                    # Create a wrapper that includes parent and its following siblings
+                    return parent
+        
+        # Strategy 2: Search by class/id containing keywords
+        for keyword in heading_keywords:
+            # Look for elements with class or id containing the keyword
+            elements = soup.find_all(class_=lambda x: x and keyword.lower() in str(x).lower())
+            elements.extend(soup.find_all(id=lambda x: x and keyword.lower() in str(x).lower()))
+            
+            for elem in elements:
+                if elem.name in ['section', 'article', 'div']:
+                    text = self._extract_text_content(elem)
+                    if len(text) > 50:
+                        return elem
+        
+        # Strategy 3: Find sections/articles/divs with substantial content containing keywords
+        for container in soup.find_all(['section', 'article', 'div']):
+            container_text = self._extract_text_content(container).lower()
+            if len(container_text) > 100:  # Substantial content
+                if any(keyword.lower() in container_text for keyword in heading_keywords):
+                    # Check if it has a heading with the keyword
+                    heading = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                    if heading:
+                        heading_text = self._extract_text_content(heading).lower()
+                        if any(keyword.lower() in heading_text for keyword in heading_keywords):
+                            return container
         
         return None
     
@@ -146,7 +187,20 @@ class StructuredScraper:
         camps_section = self._find_section_by_heading(soup, ['camp', 'camps'])
         
         if not camps_section:
-            logger.warning("Could not find camps section")
+            logger.warning("Could not find camps section by heading, trying fallback method")
+            # Fallback: search entire page for camp-related content
+            # Look for any section/div that contains camp-related text
+            for container in soup.find_all(['section', 'article', 'div']):
+                container_text = self._extract_text_content(container).lower()
+                if 'camp' in container_text and len(container_text) > 100:
+                    # Check if it has substantial content and isn't just navigation
+                    if not any(word in container_text for word in ['navigation', 'menu', 'footer', 'header']):
+                        camps_section = container
+                        logger.info(f"Found camps section via fallback: {container.name} with {len(container_text)} chars")
+                        break
+        
+        if not camps_section:
+            logger.warning("Could not find camps section even with fallback")
             return camps_data
         
         # Extract overview from heading and first paragraph
@@ -175,7 +229,7 @@ class StructuredScraper:
         # Method 1: List items
         for li in camps_section.find_all('li'):
             li_text = self._extract_text_content(li)
-            if len(li_text) > 20:
+            if len(li_text) > 15:  # Lowered threshold
                 camp_item = {
                     "name": None,
                     "age_range": None,
@@ -198,6 +252,32 @@ class StructuredScraper:
                 else:
                     # First sentence as name
                     first_sentence = re.split(r'[.!?]', li_text)[0]
+                    if len(first_sentence) > 5 and len(first_sentence) < 150:  # Increased max length
+                        camp_item["name"] = first_sentence.strip()
+                
+                camp_items.append(camp_item)
+        
+        # Method 1b: Paragraphs that might be camp items
+        for para in camps_section.find_all('p'):
+            para_text = self._extract_text_content(para)
+            # Check if paragraph looks like a camp item (has age range or is short/structured)
+            age_range = self._extract_age_range(para_text)
+            if age_range or (len(para_text) > 20 and len(para_text) < 300):
+                camp_item = {
+                    "name": None,
+                    "age_range": age_range,
+                    "description": para_text,
+                    "duration": None,
+                    "schedule": None,
+                    "location": "TX – Alamo Ranch"
+                }
+                
+                if age_range:
+                    name_match = re.search(r'(.+?)(?:\(|ages?|\d+)', para_text, re.IGNORECASE)
+                    if name_match:
+                        camp_item["name"] = name_match.group(1).strip(' .,!?;:')
+                else:
+                    first_sentence = re.split(r'[.!?]', para_text)[0]
                     if len(first_sentence) > 5 and len(first_sentence) < 100:
                         camp_item["name"] = first_sentence.strip()
                 
@@ -206,13 +286,14 @@ class StructuredScraper:
         # Method 2: Divs/sections that look like camp cards
         for div in camps_section.find_all(['div', 'section', 'article']):
             div_text = self._extract_text_content(div)
-            if len(div_text) > 30 and len(div_text) < 500:  # Reasonable size for a camp item
+            # More lenient size check
+            if len(div_text) > 20 and len(div_text) < 800:
                 # Check if it has a heading (likely a camp name)
                 heading = div.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
                 if heading:
                     heading_text = self._extract_text_content(heading)
                     # Check if this looks like a camp item (not a section heading)
-                    if len(heading_text) < 100 and not any(word in heading_text.lower() for word in ['section', 'overview', 'about']):
+                    if len(heading_text) < 150 and not any(word in heading_text.lower() for word in ['section', 'overview', 'about', 'camp', 'camps']):
                         camp_item = {
                             "name": heading_text,
                             "age_range": None,
@@ -225,12 +306,13 @@ class StructuredScraper:
                         # Extract description (paragraphs in this div)
                         paras = div.find_all('p')
                         if paras:
-                            descriptions = [self._extract_text_content(p) for p in paras]
-                            camp_item["description"] = ' '.join(descriptions)
+                            descriptions = [self._extract_text_content(p) for p in paras if len(self._extract_text_content(p)) > 10]
+                            if descriptions:
+                                camp_item["description"] = ' '.join(descriptions)
                         else:
                             # Use div text excluding heading
                             desc_text = div_text.replace(heading_text, '').strip()
-                            if desc_text:
+                            if desc_text and len(desc_text) > 10:
                                 camp_item["description"] = desc_text
                         
                         # Extract age range
@@ -241,6 +323,48 @@ class StructuredScraper:
                         
                         if camp_item["description"] or camp_item["name"]:
                             camp_items.append(camp_item)
+        
+        # Method 3: If no items found, try extracting from all text in section
+        # Split by sentences/patterns that might indicate separate camps
+        if not camp_items:
+            section_text = self._extract_text_content(camps_section)
+            # Look for patterns like "Camp Name (8+)" or "Camp Name. Description"
+            # Split by patterns that indicate new items
+            item_patterns = [
+                r'([A-Z][^.!?]*(?:\([0-9]|ages?|\d+)[^.!?]*[.!?])',  # Text with age info ending in punctuation
+                r'([A-Z][^.!?]{20,200}[.!?])',  # Substantial sentences
+            ]
+            
+            for pattern in item_patterns:
+                matches = re.finditer(pattern, section_text)
+                for match in matches:
+                    item_text = match.group(1).strip()
+                    if len(item_text) > 20:
+                        camp_item = {
+                            "name": None,
+                            "age_range": None,
+                            "description": item_text,
+                            "duration": None,
+                            "schedule": None,
+                            "location": "TX – Alamo Ranch"
+                        }
+                        
+                        age_range = self._extract_age_range(item_text)
+                        if age_range:
+                            camp_item["age_range"] = age_range
+                            name_match = re.search(r'(.+?)(?:\(|ages?|\d+)', item_text, re.IGNORECASE)
+                            if name_match:
+                                camp_item["name"] = name_match.group(1).strip(' .,!?;:')
+                        
+                        if not camp_item["name"]:
+                            first_sentence = re.split(r'[.!?]', item_text)[0]
+                            if len(first_sentence) > 5:
+                                camp_item["name"] = first_sentence.strip()
+                        
+                        camp_items.append(camp_item)
+                
+                if camp_items:
+                    break
         
         # Remove duplicates based on name
         seen_names = set()
@@ -271,7 +395,18 @@ class StructuredScraper:
         programs_section = self._find_section_by_heading(soup, ['program', 'programs', 'core program'])
         
         if not programs_section:
-            logger.warning("Could not find programs section")
+            logger.warning("Could not find programs section by heading, trying fallback method")
+            # Fallback: search entire page
+            for container in soup.find_all(['section', 'article', 'div']):
+                container_text = self._extract_text_content(container).lower()
+                if ('program' in container_text or 'academy' in container_text or 'create' in container_text) and len(container_text) > 100:
+                    if not any(word in container_text for word in ['navigation', 'menu', 'footer', 'header', 'camp']):
+                        programs_section = container
+                        logger.info(f"Found programs section via fallback: {container.name}")
+                        break
+        
+        if not programs_section:
+            logger.warning("Could not find programs section even with fallback")
             return programs_data
         
         # Extract overview
@@ -374,7 +509,18 @@ class StructuredScraper:
         )
         
         if not additional_section:
-            logger.warning("Could not find additional programs section")
+            logger.warning("Could not find additional programs section by heading, trying fallback method")
+            # Fallback: search entire page
+            for container in soup.find_all(['section', 'article', 'div']):
+                container_text = self._extract_text_content(container).lower()
+                if any(keyword in container_text for keyword in ['parent', 'birthday', 'party', 'night out', 'additional']) and len(container_text) > 100:
+                    if not any(word in container_text for word in ['navigation', 'menu', 'footer', 'header']):
+                        additional_section = container
+                        logger.info(f"Found additional programs section via fallback: {container.name}")
+                        break
+        
+        if not additional_section:
+            logger.warning("Could not find additional programs section even with fallback")
             return additional_data
         
         # Extract overview
@@ -488,9 +634,21 @@ class StructuredScraper:
             "additional_programs": additional_data
         }
         
+        total_camps = len(camps_data['camps'])
+        total_programs = len(programs_data['programs'])
+        total_additional = len(additional_data['programs'])
+        
         logger.info(f"Scraped {url}: "
-                   f"{len(camps_data['camps'])} camps, "
-                   f"{len(programs_data['programs'])} programs, "
-                   f"{len(additional_data['programs'])} additional programs")
+                   f"{total_camps} camps, "
+                   f"{total_programs} programs, "
+                   f"{total_additional} additional programs")
+        
+        # Debug: log if we found sections but no items
+        if total_camps == 0:
+            logger.warning("Found camps section but extracted 0 camp items - may need to adjust extraction logic")
+        if total_programs == 0:
+            logger.warning("Found programs section but extracted 0 program items - may need to adjust extraction logic")
+        if total_additional == 0:
+            logger.warning("Found additional programs section but extracted 0 items - may need to adjust extraction logic")
         
         return result
