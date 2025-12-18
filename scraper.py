@@ -219,10 +219,8 @@ class DynamicScraper:
         """
         chunks = []
         
-        # Look for common card/container class patterns
-        card_keywords = ['card', 'item', 'camp', 'program', 'product', 'service', 'offer', 'listing']
-        
         # Find all potential content containers
+        # NO keyword filtering - extract ALL meaningful containers
         containers = soup.find_all(['section', 'article', 'div'], 
                                   class_=lambda x: x and isinstance(x, (list, str)))
         
@@ -232,10 +230,16 @@ class DynamicScraper:
             if not self._is_meaningful_text(container_text, min_length=30):
                 continue
             
-            # Check if this looks like a card/item (has card-like classes)
-            classes = container.get('class', [])
-            class_str = ' '.join(classes).lower() if isinstance(classes, list) else str(classes).lower()
-            is_card_like = any(keyword in class_str for keyword in card_keywords)
+            # Check if container has substantial content (structural check, not keyword-based)
+            # A container is meaningful if it has:
+            # - A heading/title
+            # - Multiple text elements
+            # - Substantial text content
+            has_heading = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) is not None
+            has_multiple_elements = len(container.find_all(['p', 'span', 'div', 'li'])) > 1
+            has_substantial_text = len(container_text) > 50
+            
+            is_meaningful_container = has_heading or has_multiple_elements or has_substantial_text
             
             # Try to find a title/heading within the container
             title = None
@@ -243,8 +247,8 @@ class DynamicScraper:
             if title_elem:
                 title = self._extract_text_content(title_elem)
             
-            # For card-like containers, extract structured information
-            if is_card_like or title:
+            # For meaningful containers, extract structured information
+            if is_meaningful_container or title:
                 # Extract all text elements in order, preserving structure
                 text_elements = []
                 
@@ -352,107 +356,123 @@ class DynamicScraper:
         
         return chunks
     
-    def _extract_structured_camp_items(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    def _extract_structured_items(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """
-        Extract individual camp/program items with their details.
-        Looks for patterns like "Camp Name (Age Group)" or structured listings.
-        Improved to split combined text into individual camp items.
+        Extract individual structured items with their details.
+        Dynamically identifies items with structured information (age groups, titles, etc.)
+        NO hardcoded keywords - extracts ALL structured content.
         
         Args:
             soup: BeautifulSoup object
             
         Returns:
-            List[Dict[str, Any]]: List of structured camp/program chunks
+            List[Dict[str, Any]]: List of structured item chunks
         """
-        import re
         chunks = []
         
-        # Look for text patterns that indicate camp listings
-        # Patterns like: "Minecraft and Roblox. Yep, BOTH!(8+)"
-        # Or: "Camp Name (5-7)" or "Camp Name Ages 8+"
-        
-        # Find all text nodes and check for camp-like patterns
+        # Find all text elements that might contain structured information
         for elem in soup.find_all(['p', 'div', 'span', 'li', 'h2', 'h3', 'h4', 'article', 'section']):
             text = self._extract_text_content(elem)
             if not text or len(text) < 10:
                 continue
             
-            # Look for camp/program keywords
-            camp_keywords = ['camp', 'minecraft', 'roblox', 'dojo', 'academy', 'program', 'class', 'test']
-            has_camp_keyword = any(keyword in text.lower() for keyword in camp_keywords)
-            
-            if not has_camp_keyword:
-                continue
-            
             # Look for age group patterns: (8+), (5-7), Ages 8+, etc.
+            # This is a structural pattern, not a keyword filter
             age_patterns = [
-                r'\((\d+)\+?\)',  # (8+), (5-7) - note: this won't match (5-7), need separate pattern
+                r'\((\d+)\+?\)',  # (8+)
                 r'\((\d+)\s*(?:to|-|–|—)\s*(\d+)\)',  # (5-7), (8-14)
                 r'ages?\s+(\d+)\s*(?:to|-|–|—)?\s*(\d+)?',  # Ages 8, Ages 5-7
                 r'(\d+)\s*(?:to|-|–|—)\s*(\d+)\s*years?',  # 5-7 years
             ]
             
-            # Check if text contains multiple camp items (split by common delimiters)
-            # Split by periods, exclamation marks, or newlines if they're followed by camp-like text
-            split_patterns = [
-                r'\.\s+(?=[A-Z][^.!?]*(?:camp|minecraft|roblox|dojo|program|class|\(|\d+\+))',  # Period before camp mention
-                r'!\s*(?=[A-Z])',  # Exclamation mark
-                r'\n+',  # Newlines
+            has_age_info = any(re.search(pattern, text, re.IGNORECASE) for pattern in age_patterns)
+            
+            # Look for price patterns: $100, $99.99, etc.
+            price_patterns = [
+                r'\$(\d+(?:,\d{3})*(?:\.\d{2})?)',  # $100, $1,000, $99.99
             ]
+            has_price_info = any(re.search(pattern, text, re.IGNORECASE) for pattern in price_patterns)
             
-            # Try to split text into individual items
-            items = [text]  # Default: treat as single item
-            for pattern in split_patterns:
-                potential_items = re.split(pattern, text)
-                if len(potential_items) > 1:
-                    # Check if splits make sense (each has meaningful content)
-                    valid_items = [item.strip() for item in potential_items if len(item.strip()) > 20]
-                    if len(valid_items) > 1:
-                        items = valid_items
-                        break
+            # Look for date/time patterns
+            date_patterns = [
+                r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)',
+                r'(january|february|march|april|may|june|july|august|september|october|november|december)',
+                r'\d{1,2}:\d{2}\s*(?:am|pm)?',
+            ]
+            has_date_info = any(re.search(pattern, text, re.IGNORECASE) for pattern in date_patterns)
             
-            # Process each item
-            for item_text in items:
-                item_text = item_text.strip()
-                if len(item_text) < 10:
-                    continue
+            # Extract structured information if present
+            # This creates structured chunks for ANY content with structured data, not just camps
+            if has_age_info or has_price_info or has_date_info or len(text) > 50:
+                # Try to split text into individual items if it contains multiple items
+                # Split by common delimiters that indicate separate items
+                split_patterns = [
+                    r'\.\s+(?=[A-Z][^.!?]{10,})',  # Period followed by capital letter and substantial text
+                    r'!\s*(?=[A-Z])',  # Exclamation mark followed by capital
+                    r'\n+',  # Newlines
+                ]
                 
-                # Extract age group if present
-                age_group = None
-                for pattern in age_patterns:
-                    match = re.search(pattern, item_text, re.IGNORECASE)
-                    if match:
-                        if match.lastindex == 2 and match.group(2):
-                            age_group = f"{match.group(1)}-{match.group(2)}"
-                        else:
-                            age_group = f"{match.group(1)}+" if '+' in match.group(0) else match.group(1)
-                        break
+                items = [text]  # Default: treat as single item
+                for pattern in split_patterns:
+                    potential_items = re.split(pattern, text)
+                    if len(potential_items) > 1:
+                        # Check if splits make sense (each has meaningful content)
+                        valid_items = [item.strip() for item in potential_items if len(item.strip()) > 20]
+                        if len(valid_items) > 1:
+                            items = valid_items
+                            break
                 
-                # Extract camp name (text before age info, or first part)
-                camp_name = None
-                if age_group:
-                    # Find text before the age pattern
-                    age_pattern_str = r'\(.*?\)|ages?.*?\d+|^\d+.*?years?'
-                    match = re.search(r'(.+?)(?:' + age_pattern_str + ')', item_text, re.IGNORECASE)
-                    if match:
-                        camp_name = match.group(1).strip(' .,!?;:')
-                else:
-                    # If no age group, take first sentence or first 50 chars
-                    first_sentence = re.split(r'[.!?]', item_text)[0]
-                    if len(first_sentence) > 10 and len(first_sentence) < 100:
-                        camp_name = first_sentence.strip()
-                
-                # Only create chunk if it has meaningful content
-                if len(item_text) > 20:
+                # Process each item
+                for item_text in items:
+                    item_text = item_text.strip()
+                    if not self._is_meaningful_text(item_text, min_length=20):
+                        continue
+                    
+                    # Extract age group if present
+                    age_group = None
+                    for pattern in age_patterns:
+                        match = re.search(pattern, item_text, re.IGNORECASE)
+                        if match:
+                            if match.lastindex == 2 and match.group(2):
+                                age_group = f"{match.group(1)}-{match.group(2)}"
+                            else:
+                                age_group = f"{match.group(1)}+" if '+' in match.group(0) else match.group(1)
+                            break
+                    
+                    # Extract price if present
+                    price = None
+                    for pattern in price_patterns:
+                        match = re.search(pattern, item_text, re.IGNORECASE)
+                        if match:
+                            price = f"${match.group(1)}"
+                            break
+                    
+                    # Extract title/name (text before structured info, or first sentence)
+                    item_name = None
+                    if age_group or price:
+                        # Find text before the structured pattern
+                        pattern_str = r'\(.*?\)|ages?.*?\d+|\$\d+|^\d+.*?years?'
+                        match = re.search(r'(.+?)(?:' + pattern_str + ')', item_text, re.IGNORECASE)
+                        if match:
+                            item_name = match.group(1).strip(' .,!?;:')
+                    else:
+                        # If no structured info, take first sentence or first 50 chars
+                        first_sentence = re.split(r'[.!?]', item_text)[0]
+                        if len(first_sentence) > 10 and len(first_sentence) < 100:
+                            item_name = first_sentence.strip()
+                    
+                    # Create structured chunk
                     chunk = {
                         'text': item_text,
-                        'type': 'camp_item',
+                        'type': 'structured_item',
                         'metadata': {}
                     }
                     if age_group:
                         chunk['metadata']['age_group'] = age_group
-                    if camp_name and len(camp_name) > 3:
-                        chunk['metadata']['camp_name'] = camp_name
+                    if price:
+                        chunk['metadata']['price'] = price
+                    if item_name and len(item_name) > 3:
+                        chunk['metadata']['item_name'] = item_name
                     
                     chunks.append(chunk)
         
@@ -477,7 +497,7 @@ class DynamicScraper:
         all_chunks.extend(self._extract_list_items(soup))
         all_chunks.extend(self._extract_cards_and_sections(soup))
         all_chunks.extend(self._extract_tables(soup))
-        all_chunks.extend(self._extract_structured_camp_items(soup))  # New: structured camp items
+        all_chunks.extend(self._extract_structured_items(soup))  # New: structured items (dynamic, no keywords)
         
         # Remove duplicates (same text)
         seen_texts = set()

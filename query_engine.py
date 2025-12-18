@@ -91,17 +91,9 @@ class DynamicQueryEngine:
         if not chunks:
             return "I couldn't find relevant information to answer your question. Please try rephrasing or asking about something else."
         
-        # Prioritize camp_item chunks for camp-related queries
-        query_lower = query.lower()
-        is_camp_query = 'camp' in query_lower
-        
-        # Sort chunks: camp_item first if it's a camp query, then by similarity score
-        if is_camp_query:
-            camp_items = [c for c in chunks if c.get('type') == 'camp_item']
-            other_chunks = [c for c in chunks if c.get('type') != 'camp_item']
-            sorted_chunks = camp_items + other_chunks
-        else:
-            sorted_chunks = chunks
+        # Sort chunks by similarity score (already sorted by relevance from semantic search)
+        # No keyword-based filtering - semantic search handles relevance
+        sorted_chunks = chunks
         
         # Build formatted answer
         answer_parts = []
@@ -116,17 +108,20 @@ class DynamicQueryEngine:
             metadata = chunk.get('metadata', {})
             chunk_type = chunk.get('type', 'unknown')
             
-            # Format based on chunk type
-            if chunk_type == 'camp_item':
-                # Format camp items nicely
-                camp_name = metadata.get('camp_name', '')
+            # Format based on chunk type and metadata
+            if chunk_type == 'structured_item':
+                # Format structured items nicely (dynamic - works for any structured content)
+                item_name = metadata.get('item_name', '')
                 age_group = metadata.get('age_group', '')
+                price = metadata.get('price', '')
                 
                 formatted_item = ""
-                if camp_name:
-                    formatted_item = f"**{camp_name}**"
+                if item_name:
+                    formatted_item = f"**{item_name}**"
                 if age_group:
                     formatted_item += f" (Ages {age_group})"
+                if price:
+                    formatted_item += f" - {price}"
                 if formatted_item:
                     formatted_item += ": "
                 formatted_item += text
@@ -141,8 +136,8 @@ class DynamicQueryEngine:
         # Join with newlines for readability
         formatted_answer = '\n\n'.join(answer_parts)
         
-        # Limit length but be more generous for camp listings
-        max_length = 3000 if is_camp_query else 2000
+        # Limit length to avoid overwhelming response
+        max_length = 3000
         if len(formatted_answer) > max_length:
             formatted_answer = formatted_answer[:max_length] + "..."
         
