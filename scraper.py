@@ -74,6 +74,88 @@ class DynamicScraper:
         text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
         return text.strip()
     
+    def _is_ui_element(self, text: str) -> bool:
+        """
+        Check if text is likely a UI element (button, form label, etc.) that should be filtered.
+        
+        Args:
+            text: Text to check
+            
+        Returns:
+            True if text appears to be a UI element
+        """
+        if not text:
+            return True
+        
+        text_lower = text.lower().strip()
+        
+        # Common UI button/link text patterns
+        ui_patterns = [
+            r'^(learn more|enroll now|request info|show|click|submit|close|book|find|get started|sign up|register|view|see more|read more|continue|next|previous|back|home|menu|search|login|logout|contact|about|faq|blog|press|careers|franchising|locations|programs|partnership)$',
+            r'^(first name|last name|email|phone|zip|question|message|name field|email field|phone field|zip field|question field|message field).*(required|field)',
+            r'^(required|optional|field is required)',
+            r'^(teams and conditions|terms and conditions|privacy policy|cookie policy)',
+            r'^(us & canada|united kingdom|united states)',
+            r'^(change location|find location|let us find|locations near you)',
+            r'^(your information|your question|send question)',
+            r'^(thanks!|thank you|success|error|loading|please wait)',
+        ]
+        
+        for pattern in ui_patterns:
+            if re.match(pattern, text_lower):
+                return True
+        
+        # Very short text that's likely a button/link
+        if len(text_lower) <= 3 and text_lower.isupper():
+            return True
+        
+        # Text that's all uppercase and short (likely navigation)
+        if len(text_lower) <= 15 and text.isupper() and not any(c.islower() for c in text):
+            return True
+        
+        # Check if text is mostly navigation items (repeated patterns)
+        navigation_keywords = ['programs', 'about', 'locations', 'partnership', 'franchising', 'blog', 'press', 'careers', 'faq', 'us & canada', 'united kingdom']
+        nav_count = sum(1 for nav in navigation_keywords if nav in text_lower)
+        if nav_count >= 3:  # If contains 3+ navigation keywords, likely navigation
+            return True
+        
+        return False
+    
+    def _is_navigation_text(self, text: str) -> bool:
+        """
+        Check if text is navigation/menu text that should be filtered.
+        
+        Args:
+            text: Text to check
+            
+        Returns:
+            True if text appears to be navigation
+        """
+        if not text:
+            return False
+        
+        text_lower = text.lower()
+        
+        # Patterns that indicate navigation text
+        nav_patterns = [
+            r'programs.*code ninjas.*create.*code ninjas.*academies.*code ninjas.*jr.*code ninjas.*camps',  # Program menu
+            r'about.*about us.*our vision.*careers.*faq.*blog.*press.*partnership.*franchising',  # About menu
+            r'us & canada.*united kingdom.*find location.*book free session',  # Location menu
+            r'locations near you.*change location.*let us find',  # Location finder
+        ]
+        
+        for pattern in nav_patterns:
+            if re.search(pattern, text_lower):
+                return True
+        
+        # If text contains many program names in sequence (likely navigation)
+        program_names = ['code ninjas create', 'code ninjas academies', 'code ninjas jr', 'code ninjas camps', 'additional programs']
+        program_count = sum(1 for prog in program_names if prog in text_lower)
+        if program_count >= 3:
+            return True
+        
+        return False
+    
     def _extract_text_from_element(self, element: Tag) -> str:
         """Extract clean text from an element."""
         if not element:
@@ -236,14 +318,25 @@ class DynamicScraper:
                 if text_hash in seen_texts:
                     continue
                 
-                # For links and buttons, include even if short (navigation items)
+                # Filter out UI elements
+                if self._is_ui_element(text):
+                    continue
+                
+                # For links and buttons, be more selective - only include if they have meaningful content
                 if tag_name in ['a', 'button']:
-                    if len(text) >= 2:  # Include navigation items
+                    # Skip very short links/buttons (likely navigation)
+                    if len(text) < 5:
+                        continue
+                    # Skip common UI patterns
+                    if self._is_ui_element(text):
+                        continue
+                    # Only include if it's a meaningful link/button (not just "LEARN MORE", etc.)
+                    if len(text) >= 10 and not text.isupper():
                         seen_texts.add(text_hash)
                         content_elements.append(elem)
                 else:
                     # For other elements, require more substantial text
-                    if len(text) >= 10:
+                    if len(text) >= 15:  # Increased from 10 to filter more noise
                         seen_texts.add(text_hash)
                         content_elements.append(elem)
         
@@ -266,31 +359,50 @@ class DynamicScraper:
             # Get all text from this div
             all_text = self._extract_text_from_element(div)
             
-            # Include if it has substantial text (30+ chars)
-            if all_text and len(all_text) >= 30:
+            # Filter out UI elements and navigation
+            if self._is_ui_element(all_text) or self._is_navigation_text(all_text):
+                continue
+            
+            # Include if it has substantial text (50+ chars, increased from 30)
+            if all_text and len(all_text) >= 50:
                 # Check if this div contains semantic elements or has direct text
-                has_semantic_children = div.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'a', 'button', 'span'])
+                has_semantic_children = div.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'])
+                
+                # Skip divs that are mostly navigation/UI
+                # Check if it's mostly links/buttons
+                links_buttons = div.find_all(['a', 'button'])
+                if links_buttons and len(links_buttons) > len(div.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])) * 2:
+                    continue  # Too many links/buttons relative to content
                 
                 # Include if:
-                # 1. Has semantic children, OR
+                # 1. Has semantic children (paragraphs, headings), OR
                 # 2. Has substantial direct text (not just a wrapper)
-                if has_semantic_children or (len(direct_text) >= 20):
+                if has_semantic_children or (len(direct_text) >= 30):
                     # Skip if we've seen this text
                     text_hash = hashlib.md5(all_text.lower().encode()).hexdigest()
                     if text_hash not in seen_texts:
                         seen_texts.add(text_hash)
                         content_elements.append(div)
         
-        # Strategy 3: Extract navigation and footer content
+        # Strategy 3: Extract navigation and footer content (but be selective)
+        # Skip most nav/footer/header as they're mostly UI elements
+        # Only include if they have substantial unique content
         for nav in soup.find_all(['nav', 'footer', 'header']):
             if not isinstance(nav, Tag):
                 continue
             text = self._extract_text_from_element(nav)
-            if text and len(text) >= 10:
-                text_hash = hashlib.md5(text.lower().encode()).hexdigest()
-                if text_hash not in seen_texts:
-                    seen_texts.add(text_hash)
-                    content_elements.append(nav)
+            # Filter out UI-heavy navigation
+            if self._is_ui_element(text) or len(text) < 50:
+                continue
+            # Check if it's mostly links/buttons
+            links_buttons = nav.find_all(['a', 'button'])
+            content_elements_in_nav = nav.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'])
+            if links_buttons and len(links_buttons) > len(content_elements_in_nav) * 3:
+                continue  # Too many links relative to content
+            text_hash = hashlib.md5(text.lower().encode()).hexdigest()
+            if text_hash not in seen_texts:
+                seen_texts.add(text_hash)
+                content_elements.append(nav)
         
         # Remove nested elements (if parent is already in list)
         unique_elements = []
@@ -314,12 +426,97 @@ class DynamicScraper:
         
         return unique_elements
     
-    def scrape(self, url: str) -> List[Dict[str, Any]]:
+    def _fetch_camps_from_api(self, location_slug: str) -> List[Dict[str, Any]]:
+        """
+        Fetch actual upcoming camps from the Code Ninjas API.
+        
+        Args:
+            location_slug: Location slug (e.g., 'tx-alamo-ranch')
+            
+        Returns:
+            List of camp dictionaries with structured data
+        """
+        camps_data = []
+        
+        try:
+            # Step 1: Get facility profile to get facility ID
+            profile_url = f"https://code-ninjas-public-api-uat.azurewebsites.net/api/v1/facility/profile/slug/{location_slug}"
+            response = self.session.get(profile_url, timeout=self.timeout)
+            response.raise_for_status()
+            profile_data = response.json()
+            facility_id = profile_data.get('facilityId')
+            
+            if not facility_id:
+                logger.warning(f"Could not get facility ID for {location_slug}")
+                return camps_data
+            
+            # Step 2: Get upcoming camps using facility ID
+            camps_api_url = f"https://code-ninjas-public-api-uat.azurewebsites.net/api/v1/facility/camps/upcoming/{facility_id}"
+            response = self.session.get(camps_api_url, timeout=self.timeout)
+            response.raise_for_status()
+            api_response_data = response.json()
+            camps_list = api_response_data.get('camps', [])
+            
+            if not isinstance(camps_list, list):
+                logger.warning(f"Unexpected camps API response format")
+                return camps_data
+            
+            # Process API camps_list
+            for api_camp in camps_list:
+                camp_item = {
+                    "name": api_camp.get("title", ""),
+                    "age_range": self._extract_age_range(api_camp.get("age", "")),
+                    "description": api_camp.get("description", ""),
+                    "price": f"${api_camp.get('price'):.0f}" if api_camp.get('price') is not None else None,
+                    "duration": None,
+                    "schedule": None,
+                    "dates": [],
+                }
+                
+                # Format dates and times
+                start_dt_str = api_camp.get("startDateTime")
+                end_dt_str = api_camp.get("endDateTime")
+                
+                if start_dt_str and end_dt_str:
+                    try:
+                        start_dt = datetime.fromisoformat(start_dt_str.replace('Z', '+00:00'))
+                        end_dt = datetime.fromisoformat(end_dt_str.replace('Z', '+00:00'))
+                        
+                        camp_item["duration"] = f"{start_dt.strftime('%b %d')} - {end_dt.strftime('%b %d, %Y')}"
+                        camp_item["schedule"] = f"{start_dt.strftime('%I:%M %p')} - {end_dt.strftime('%I:%M %p')}"
+                        camp_item["dates"] = [start_dt.strftime('%b %d, %Y'), end_dt.strftime('%b %d, %Y')]
+                    except (ValueError, AttributeError) as ve:
+                        logger.warning(f"Could not parse date/time for camp {camp_item['name']}: {ve}")
+                
+                # Remove None values
+                camp_item = {k: v for k, v in camp_item.items() if v is not None and v != []}
+                if camp_item.get("name"):  # Only add if has a name
+                    camps_data.append(camp_item)
+            
+            logger.info(f"Fetched {len(camps_data)} camps from API for {location_slug}")
+            
+        except Exception as e:
+            logger.error(f"Error fetching camps from API: {str(e)}")
+        
+        return camps_data
+    
+    def _extract_age_range(self, age_str: str) -> Optional[str]:
+        """Extract age range from age string."""
+        if not age_str:
+            return None
+        # Handle various formats like "5-7", "8+", etc.
+        age_str = str(age_str).strip()
+        if age_str:
+            return age_str
+        return None
+    
+    def scrape(self, url: str, location_slug: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Scrape a URL and return ALL content as chunks.
         
         Args:
             url: URL to scrape
+            location_slug: Optional location slug for API integration (e.g., 'tx-alamo-ranch')
             
         Returns:
             List of chunk dictionaries with metadata:
@@ -347,6 +544,10 @@ class DynamicScraper:
         for idx, element in enumerate(content_elements):
             text = self._extract_text_from_element(element)
             if not text or len(text) < 10:
+                continue
+            
+            # Filter out UI elements
+            if self._is_ui_element(text):
                 continue
             
             # Identify section dynamically
@@ -382,6 +583,40 @@ class DynamicScraper:
                     }
                 }
                 chunks.append(chunk)
+        
+        # Add camps data from API if location_slug is provided
+        if location_slug:
+            camps_data = self._fetch_camps_from_api(location_slug)
+            for camp in camps_data:
+                # Format camp as structured text chunk
+                camp_text_parts = []
+                if camp.get("name"):
+                    camp_text_parts.append(f"Camp: {camp['name']}")
+                if camp.get("age_range"):
+                    camp_text_parts.append(f"Age Range: {camp['age_range']}")
+                if camp.get("description"):
+                    camp_text_parts.append(f"Description: {camp['description']}")
+                if camp.get("price"):
+                    camp_text_parts.append(f"Price: {camp['price']}")
+                if camp.get("duration"):
+                    camp_text_parts.append(f"Duration: {camp['duration']}")
+                if camp.get("schedule"):
+                    camp_text_parts.append(f"Schedule: {camp['schedule']}")
+                
+                if camp_text_parts:
+                    camp_text = ". ".join(camp_text_parts)
+                    chunk_id = hashlib.md5(f"camp_{location_slug}_{camp.get('name', '')}".encode()).hexdigest()
+                    chunks.append({
+                        "chunk_id": chunk_id,
+                        "url": url,
+                        "section": "UPCOMING CAMPS",
+                        "text": camp_text,
+                        "metadata": {
+                            "element_type": "api_data",
+                            "type": "camp",
+                            "camp_data": camp
+                        }
+                    })
         
         # Deduplicate chunks (remove exact duplicates)
         seen_chunks = set()

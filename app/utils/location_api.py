@@ -17,11 +17,12 @@ class LocationAPIClient:
     """
     
     def __init__(self):
-        """Initialize the location API client with settings."""
+        """Initialize the location API client with settings from environment."""
         self.settings = get_settings()
-        self.slug_api_url = getattr(self.settings, 'location_slug_api_url', None)
-        self.location_data_api_url = getattr(self.settings, 'location_data_api_url', None)
-        self.api_key = getattr(self.settings, 'location_api_key', None)
+        # Load from config (which loads from .env files)
+        self.slug_api_url = self.settings.location_slug_api_url or None
+        self.location_data_api_url = self.settings.location_data_api_url or None
+        self.api_key = self.settings.location_api_key or None
         self.timeout = 10.0  # 10 seconds timeout
     
     async def get_location_slug(self, location_name: str, question: Optional[str] = None) -> Optional[str]:

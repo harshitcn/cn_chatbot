@@ -13,17 +13,8 @@ from app.predefined_qa import get_predefined_answer, normalize_question
 from app.utils.embeddings import load_or_build_faiss_index, get_embeddings
 from app.utils.location_detector import LocationDetector
 from app.utils.location_api import LocationAPIClient
-import asyncio
-import sys
-from pathlib import Path
-
-# Import the new dynamic chatbot system
-# Add root directory to path to import the new modules
-root_dir = Path(__file__).parent.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
-
-from chatbot import DynamicChatbot
+from app.utils.data_api_client import DataAPIClient
+from app.utils.api_query_engine import APIQueryEngine
 
 
 class FAQRetriever:
@@ -45,47 +36,16 @@ class FAQRetriever:
                                  - 0.0-0.8: Very similar (excellent match)
                                  - 0.8-1.0: Similar (good match)
                                  - 1.0-1.2: Somewhat related (acceptable match)
-                                 - >1.2: Poor match, reject and try web scraping
+                                 - >1.2: Poor match, reject and try API calls
         """
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
         self.vector_store: Optional[FAISS] = None
         self.location_detector = LocationDetector()
         self.location_api_client = LocationAPIClient()
-        self.dynamic_chatbot: Optional[DynamicChatbot] = None
+        self.data_api_client = DataAPIClient()
+        self.api_query_engine = APIQueryEngine(self.data_api_client)
         self._initialize_vector_store()
-    
-    def _format_dynamic_answer(self, response: Dict[str, Any]) -> str:
-        """
-        Format dynamic answer response into a readable string.
-        
-        Args:
-            response: Response dictionary from DynamicChatbot
-            
-        Returns:
-            str: Formatted answer text
-        """
-        if not response or response.get("status") != "success":
-            answer = response.get("answer", "I couldn't find relevant information.")
-            return answer
-        
-        answer = response.get("answer", "")
-        sources = response.get("sources", [])
-        location = response.get("location", "")
-        
-        # Build formatted answer
-        answer_parts = []
-        
-        if location:
-            answer_parts.append(f"Location: {location}\n")
-        
-        answer_parts.append(answer)
-        
-        # Optionally add sources (for debugging/transparency)
-        if sources and len(sources) > 0:
-            answer_parts.append(f"\n\n(Information from {len(sources)} source(s))")
-        
-        return "\n".join(answer_parts)
     
     def _initialize_vector_store(self):
         """Initialize the FAISS vector store with FAQ data.
@@ -296,14 +256,14 @@ class FAQRetriever:
         1. Check predefined Q&A (exact/precise matching) - only return if it's a string answer (not menu/list)
         2. Check FAQ list with exact text matching first
         3. Check FAQ list with semantic search
-        4. Scrape website for general queries (not just locations)
+        4. Use API-based data extraction for location-specific queries
         
         Args:
             question: User's question string
             location_slug: Optional location slug for location-specific queries
         
         Returns:
-            str: Best matching answer from predefined Q&A, FAQ data, or scraped content
+            str: Best matching answer from predefined Q&A, FAQ data, or API data
         """
         logger = logging.getLogger(__name__)
         
@@ -518,141 +478,51 @@ class FAQRetriever:
                         logger.info(f"Found answer in FAQ list with score {best_score:.4f} and {best_keyword_overlap:.2%} keyword overlap")
                         return answer
                     else:
-                        logger.info(f"Answer found but too short or empty, proceeding to web scraping. Score: {best_score}")
+                        logger.info(f"Answer found but too short or empty, proceeding to API calls. Score: {best_score}")
                 else:
                     # Score is too high or keyword overlap too low, meaning poor match
                     logger.info(f"No relevant answer in FAQ. Best match score: {best_score:.4f}, keyword overlap: {best_keyword_overlap:.2%}")
                     if location_slug:
-                        logger.info(f"Location slug provided - prioritizing web scraping over poor FAQ match")
+                        logger.info(f"Location slug provided - prioritizing API calls over poor FAQ match")
             else:
                 # No results found
                 logger.info("No results found in FAQ list")
                 
         except Exception as e:
-            # If similarity search fails, log and proceed to web scraping
-            logger.warning(f"Error during FAQ similarity search: {str(e)}. Proceeding to web scraping.")
+            # If similarity search fails, log and proceed to API calls
+            logger.warning(f"Error during FAQ similarity search: {str(e)}. Proceeding to API calls.")
         
-        # TIER 3: Scrape website for general queries (not just locations)
-        # Prioritize location-based scraping if location_slug is provided or location detected
+        # TIER 3: Use API-based data extraction
+        # Prioritize location-based API calls if location_slug is provided or location detected
         # IMPORTANT: Use location_slug directly if provided, as it's the source of truth
         location_for_tier3 = location_slug if location_slug else location_name
         
-        logger.info(f"Tier 3: location_slug='{location_slug}', location_name='{location_name}', location_for_tier3='{location_for_tier3}'")
+        logger.info(f"Tier 3: Using API-based data extraction. location_slug='{location_slug}', location_name='{location_name}', location_for_tier3='{location_for_tier3}'")
         
         if location_for_tier3:
-            # If location_slug was provided, prioritize scraping for that location
+            # If location_slug was provided, prioritize API calls for that location
             if location_slug:
-                logger.info(f"Tier 3a: Attempting to scrape website for location slug '{location_slug}' (priority)...")
+                logger.info(f"Tier 3a: Attempting API data extraction for location slug '{location_slug}' (priority)...")
             else:
-                logger.info(f"Tier 3a: Attempting to scrape website for location '{location_name}'...")
+                logger.info(f"Tier 3a: Attempting API data extraction for location '{location_name}'...")
             
             try:
-                # Use the location slug/name for scraping - use location_slug if available, otherwise location_name
+                # Use the location slug/name for API calls - use location_slug if available, otherwise location_name
                 location_to_use = location_slug if location_slug else location_name
                 
-                # For camp-related queries, try comprehensive scraper first for better structured data
-                question_lower = question.lower()
-                is_camp_query = 'camp' in question_lower
+                # Use API-based query engine
+                response = await self.api_query_engine.answer_query(question, location_to_use)
                 
-                # Use the new structured chatbot system for scraping
-                if self.dynamic_chatbot is None:
-                    # Initialize structured chatbot (lazy initialization)
-                    from app.config import get_settings
-                    settings = get_settings()
-                    base_url = getattr(settings, 'scrape_base_url', None)
-                    if base_url:
-                        # Construct URL from location
-                        location_slug_clean = location_to_use.replace('cn-', '') if location_to_use.startswith('cn-') else location_to_use
-                        url = f"{base_url.rstrip('/')}/{location_slug_clean}/"
-                        self.dynamic_chatbot = DynamicChatbot(base_url=url, use_cache=True)
-                    else:
-                        logger.warning("scrape_base_url not configured, cannot use structured scraper")
-                
-                if self.dynamic_chatbot:
-                    # Run synchronous answer_query in executor to avoid blocking
-                    loop = asyncio.get_event_loop()
-                    response = await loop.run_in_executor(
-                        None,
-                        lambda: self.dynamic_chatbot.answer_query(question, location=location_to_use)
-                    )
-                    
-                    if response.get('status') == 'success' and response.get('answer'):
-                        # Format the dynamic answer into a readable string
-                        formatted_answer = self._format_dynamic_answer(response)
-                        logger.info(f"Successfully got answer from structured scraper for location '{location_to_use}'")
-                        return formatted_answer
-                    else:
-                        logger.warning(f"Structured scraper did not find answer for location '{location_to_use}'")
+                if response.get('status') == 'success' and response.get('answer'):
+                    answer = response.get('answer', '')
+                    logger.info(f"Successfully got answer from API for location '{location_to_use}' (found {response.get('count', 0)} items)")
+                    return answer
                 else:
-                    logger.warning(f"Structured chatbot not initialized, cannot scrape for location '{location_to_use}'")
+                    logger.warning(f"API did not return data for location '{location_to_use}'")
             except Exception as e:
-                logger.warning(f"Error scraping website for location '{location_to_use}': {str(e)}, trying general scraping...")
+                logger.warning(f"Error fetching data from API for location '{location_to_use}': {str(e)}, trying fallback...")
         else:
-            logger.info("Tier 3: No location provided, skipping location-based scraping")
-        
-        # Try general web scraping for any query (only if location scraping failed or no location)
-        logger.info("Tier 3b: Attempting general web scraping...")
-        try:
-            # Initialize structured chatbot with base URL if not already initialized
-            if self.dynamic_chatbot is None:
-                from app.config import get_settings
-                settings = get_settings()
-                base_url = getattr(settings, 'scrape_base_url', None)
-                if base_url:
-                    self.dynamic_chatbot = DynamicChatbot(base_url=base_url, use_cache=True)
-            
-            if self.dynamic_chatbot:
-                # Run synchronous answer_query in executor
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self.dynamic_chatbot.answer_query(question)
-                )
-                
-                if response.get('status') == 'success' and response.get('answer'):
-                    formatted_answer = self._format_dynamic_answer(response)
-                    logger.info("Successfully scraped content from general query")
-                    return formatted_answer
-                else:
-                    logger.warning("Structured scraper did not find answer for general query")
-            else:
-                logger.warning("Structured chatbot not initialized, cannot scrape general query")
-        except Exception as e:
-            logger.warning(f"Error during general web scraping: {str(e)}")
-        
-        # TIER 3c: Try structured scraper as final fallback
-        logger.info("Tier 3c: Attempting structured scraper as final fallback...")
-        try:
-            # Use location_slug if provided, otherwise use location_name
-            location_for_scraping = location_slug if location_slug else location_name
-            
-            # Initialize with location-specific URL if location available
-            if location_for_scraping and self.dynamic_chatbot is None:
-                from app.config import get_settings
-                settings = get_settings()
-                base_url = getattr(settings, 'scrape_base_url', None)
-                if base_url:
-                    location_slug_clean = location_for_scraping.replace('cn-', '') if location_for_scraping.startswith('cn-') else location_for_scraping
-                    url = f"{base_url.rstrip('/')}/{location_slug_clean}/"
-                    self.dynamic_chatbot = DynamicChatbot(base_url=url, use_cache=True)
-            
-            if self.dynamic_chatbot:
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self.dynamic_chatbot.answer_query(question, location=location_for_scraping)
-                )
-                
-                if response.get('status') == 'success' and response.get('answer'):
-                    formatted_answer = self._format_dynamic_answer(response)
-                    logger.info("Successfully got answer from structured scraper")
-                    return formatted_answer
-                else:
-                    logger.warning("Structured scraper did not find answer")
-            else:
-                logger.warning("Structured chatbot not initialized, cannot use structured scraper")
-        except Exception as e:
-            logger.warning(f"Error during structured scraping: {str(e)}")
+            logger.info("Tier 3: No location provided, skipping location-based API calls")
         
         # If all tiers fail, return default response
         logger.info("All tiers exhausted, returning default response")

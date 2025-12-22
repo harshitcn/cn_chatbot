@@ -26,14 +26,15 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     
-    # Location API settings
-    location_slug_api_url: str = ""  # URL for the first API that returns slug
-    location_data_api_url: str = ""  # URL for the second API that returns location data (use {slug} placeholder)
+    # Location API settings (loaded from environment file)
+    location_slug_api_url: str = ""  # URL for the first API that returns slug from location name
+    location_data_api_url: str = ""  # URL for the second API that returns location data using slug
     location_api_key: str = ""  # API key for location APIs (optional)
     
-    # Web scraping settings
-    scrape_base_url: str = ""  # Base URL for web scraping (e.g., "https://example.com")
-    scrape_url_pattern: str = "{base_url}/{location-slug}"  # URL pattern for scraping (use {base_url}, {location}, {location_name}, {location-slug})
+    # Data API settings (Tier 3) - loaded from environment file
+    data_api_base_url: str = "https://services.codeninjas.com/api/v1"  # Base URL for data APIs (camps, programs, events, etc.)
+    data_api_key: str = ""  # Optional API key for data APIs
+    
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -85,28 +86,9 @@ def get_settings() -> Settings:
         env_app_env = os.getenv("APP_ENV", app_env).lower()
         _settings.app_env = env_app_env
         
-        # Override with environment variables if set (highest priority)
-        # These override the .env file values
-        if os.getenv("DEBUG"):
-            _settings.debug = os.getenv("DEBUG").lower() in ("true", "1", "yes")
-        if os.getenv("DATABASE_URL"):
-            _settings.database_url = os.getenv("DATABASE_URL")
-        if os.getenv("VECTOR_STORE_PATH"):
-            _settings.vector_store_path = os.getenv("VECTOR_STORE_PATH")
-        if os.getenv("PORT"):
-            _settings.port = int(os.getenv("PORT"))
-        if os.getenv("APP_NAME"):
-            _settings.app_name = os.getenv("APP_NAME")
-        if os.getenv("LOCATION_SLUG_API_URL"):
-            _settings.location_slug_api_url = os.getenv("LOCATION_SLUG_API_URL")
-        if os.getenv("LOCATION_DATA_API_URL"):
-            _settings.location_data_api_url = os.getenv("LOCATION_DATA_API_URL")
-        if os.getenv("LOCATION_API_KEY"):
-            _settings.location_api_key = os.getenv("LOCATION_API_KEY")
-        if os.getenv("SCRAPE_BASE_URL"):
-            _settings.scrape_base_url = os.getenv("SCRAPE_BASE_URL")
-        if os.getenv("SCRAPE_URL_PATTERN"):
-            _settings.scrape_url_pattern = os.getenv("SCRAPE_URL_PATTERN")
+        # Pydantic BaseSettings automatically loads from .env files and environment variables
+        # Environment variables take precedence over .env file values
+        # No need for manual overrides - Pydantic handles this automatically
     
     return _settings
 

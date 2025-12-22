@@ -34,12 +34,13 @@ class DynamicChatbot:
         self._current_url: Optional[str] = None
         self._current_chunks: List[Dict[str, Any]] = []
     
-    def scrape_website(self, url: Optional[str] = None) -> List[Dict[str, Any]]:
+    def scrape_website(self, url: Optional[str] = None, location_slug: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Scrape website and return all content as chunks.
         
         Args:
             url: URL to scrape (uses base_url if not provided)
+            location_slug: Optional location slug for API integration (e.g., 'tx-alamo-ranch')
             
         Returns:
             List of chunk dictionaries
@@ -49,20 +50,23 @@ class DynamicChatbot:
                 raise ValueError("No URL provided and base_url not set")
             url = self.base_url
         
+        # Create cache key that includes location_slug
+        cache_key = f"{url}_{location_slug or ''}"
+        
         # Check cache
-        if self.use_cache and url in self._cached_chunks:
-            logger.info(f"Using cached chunks for {url}")
-            chunks = self._cached_chunks[url]
+        if self.use_cache and cache_key in self._cached_chunks:
+            logger.info(f"Using cached chunks for {cache_key}")
+            chunks = self._cached_chunks[cache_key]
             self._current_url = url
             self._current_chunks = chunks
             return chunks
         
         logger.info(f"Scraping website: {url}")
-        chunks = self.scraper.scrape(url)
+        chunks = self.scraper.scrape(url, location_slug=location_slug)
         
         # Cache
         if self.use_cache:
-            self._cached_chunks[url] = chunks
+            self._cached_chunks[cache_key] = chunks
         
         self._current_url = url
         self._current_chunks = chunks
@@ -98,11 +102,16 @@ class DynamicChatbot:
             Dict with answer and sources
         """
         try:
+            # Extract location slug from location string (e.g., "cn-tx-alamo-ranch" -> "tx-alamo-ranch")
+            location_slug = None
+            if location:
+                location_slug = location.replace('cn-', '') if location.startswith('cn-') else location
+            
             # Scrape website if needed or if URL changed
             if url and url != self._current_url:
-                self.scrape_website(url)
+                self.scrape_website(url, location_slug=location_slug)
             elif not self._current_chunks:
-                self.scrape_website(url)
+                self.scrape_website(url, location_slug=location_slug)
             
             # Ensure vector store is built
             self._ensure_vector_store()
