@@ -16,38 +16,37 @@ PREDEFINED_QA: List[Dict[str, str]] = [
     },
     {
         "question": "Parent/Guardian",
-        "answer": ['Enroll or learn about programs for my kids', 'Know more about CAMPS', 'Know more about Clubs',
-                   'Know more about Academies', 'Know more about CREATE', 'Know more about JR', 'Know more about Parent Night Out',
-                   'Know more about Birthday Parties', 'Know more about Home Schooling', 'Know more about After School Programs',
-                   'Know more about PTO / PTA', 'Know more about Upcoming Events / Programs',
-                   'Ask a general question about a program', 'Go back to Main Menu']
+        "answer": ['Enroll or learn about programs', 'Camps', 'Clubs',
+                   'Academies', 'Create', 'JR', 'Know more about Parent Night Out',
+                   # 'Know more about Birthday Parties', 'Know more about Home Schooling', 'Know more about After School Programs',
+                   # 'Know more about PTO / PTA', 'Know more about Upcoming Events / Programs',
+                   # 'Ask a general question about a program',
+                    'Go back to Main Menu']
     },
     {
         "question": "Existing Franchise Owner",
-        "answer": ['I want to know more about Franchise Ownership', 'I want to sell my Franchise',
-                   'I want to own a new Franchise', 'I want to raise a support issue', 'I have another concern',
-                   'Ask a general question regarding Franchisee cost, ownership and returns', 'Go back to Main Menu']
+        "answer": ['Franchise Ownership', 'sell my Franchise',
+                   'new Franchise', 'raise a support issue',
+                   # 'I have another concern',
+                   # 'Ask a general question regarding Franchisee cost, ownership and returns',
+                   'Go back to Main Menu']
     },
     {
         "question": "Franchise Staff",
-        "answer": ['I want to raise a support issue', 'I have another concern', 'I want to know about Program timings',
+        "answer": ['Raise a support issue', 'Program timings',
                    'Go back to Main Menu']
     },
     {
         "question": "Potential Franchise Owner",
-        "answer": ['I want to know more about Franchise Ownership', 'I want to own a Franchise',
-                   'I want to raise a support issue', 'I have another concern', 'Go back to Main Menu']
+        "answer": ['Franchise Ownership', 'Own a Franchise',
+                   'Raise a support issue', 'Another concern', 'Go back to Main Menu']
     },
     {
-        "question": "Something else/just browsing ",
+        "question": "Something else",
         "answer": [
-            'I want to know about career opportunities',
-            'I have a question regarding available programs and timings',
-            'I want to know about my nearby Centers',
-            'I want to know more about Franchise Ownership',
-            'I want to own a Franchise',
-            'I want to raise a support issue',
-            'I have another concern',
+            'Career opportunities',
+            'Available programs and timings',
+            'Nearby Centers',
             'Go back to Main Menu'
         ]
 
