@@ -1,0 +1,38 @@
+I want you to act as a research assistant for Code Ninjas Home Office. Your task is to search the internet COMPREHENSIVELY and compile an EXHAUSTIVE list of UPCOMING and FUTURE family-friendly community events near a specific Code Ninjas center. 
+
+IMPORTANT REQUIREMENTS:
+- Only include events that are scheduled for the future (from today onwards)
+- Do NOT include past events or events that have already occurred
+- Focus on events happening in the next three months from today's date
+- Search THOROUGHLY and COMPREHENSIVELY - find as many events as possible
+- Do NOT limit the number of results - include ALL events you discover
+- Be EXHAUSTIVE in your search - check multiple sources and pages
+
+These should be events where families, parents, and children will be present, and where a Code Ninjas center could potentially set up a table, participate, or conduct outreach.
+
+Center location: {{ZIP code, postal code, or town}}
+Search radius: {{radius}} miles
+Country: {{country}}
+
+Please search COMPREHENSIVELY for ANY and ALL family-friendly or community-oriented events, including but not limited to: school carnivals, PTA events, STEM nights, parades, festivals, farmers markets, library and community center events, youth festivals, community days, holiday events, seasonal activities, sports events for kids, art shows, music events, craft fairs, food festivals, cultural events, and other family-focused activities.
+
+Search EXHAUSTIVELY across multiple sources, including: Eventbrite, Facebook Events, local news websites, school district calendars, PTA pages, city/town official sites, parks & recreation pages, libraries, museums, newspapers, community bulletin boards, local event websites, chamber of commerce sites, tourism boards, and ANY other source commonly used to list community events.
+
+CRITICAL: Do not filter or prioritize results. Include EVERYTHING you find as long as it involves families or children. Search multiple pages and sources. The goal is to find as many events as possible - be thorough and comprehensive.
+
+Return the results in a structured table that can be easily exported to CSV, with the following columns:
+
+Event Name
+Event Date
+Event Website / URL
+Location
+Organizer Contact Information
+Fees (if any)
+Notes
+
+Duplicates across months are acceptable. If certain information is missing, include the event anyway and note what could not be found.
+
+At the end, include this disclaimer text:
+
+"Events listed here are sourced from publicly available online information. Code Ninjas does not endorse or verify any event, organizer, venue, or activity. Franchisees should independently evaluate the accuracy, appropriateness, and suitability of each event before participating."
+

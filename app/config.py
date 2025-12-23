@@ -35,6 +35,27 @@ class Settings(BaseSettings):
     data_api_base_url: str = "https://services.codeninjas.com/api/v1"  # Base URL for data APIs (camps, programs, events, etc.)
     data_api_key: str = ""  # Optional API key for data APIs
     
+    # LLM API settings for event discovery
+    llm_api_key: str = ""  # API key for LLM (Grok, OpenAI, etc.)
+    llm_api_url: str = ""  # API endpoint URL
+    llm_provider: str = "grok"  # LLM provider: 'grok', 'openai', etc.
+    llm_model: str = "grok-beta"  # Model name to use
+    llm_timeout: float = 180.0  # LLM API timeout in seconds (default: 180s / 3 minutes)
+    llm_max_tokens: int = 8000  # Maximum tokens for LLM response (default: 8000 for comprehensive results)
+    llm_temperature: float = 0.8  # Temperature for LLM (default: 0.8 for more comprehensive searching)
+    
+    # Events discovery settings
+    events_storage_path: str = "data/events"  # Path to store CSV files
+    default_search_radius: int = 5  # Default search radius in miles
+    prompt_template_path: str = "app/prompts/events_discovery_prompt.txt"  # Path to prompt template
+    
+    # Email settings (optional, for distribution)
+    email_smtp_host: str = ""  # SMTP server host
+    email_smtp_port: int = 587  # SMTP server port
+    email_smtp_user: str = ""  # SMTP username
+    email_smtp_password: str = ""  # SMTP password
+    email_from: str = ""  # From email address
+    email_use_tls: bool = True  # Use TLS for SMTP
     
     model_config = SettingsConfigDict(
         env_file=".env",

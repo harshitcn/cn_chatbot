@@ -12,3 +12,6 @@ beautifulsoup4>=4.12.0
 requests>=2.31.0
 numpy>=1.24.0
 
+# Optional: For automated scheduling of monthly batch runs
+# apscheduler>=3.10.0
+
