@@ -140,9 +140,7 @@ class CSVGenerator:
                 writer.writerow(['Event Name', 'Event Date', 'Event Website / URL', 
                                'Location', 'Organizer Contact Information', 'Fees (if any)', 'Notes'])
                 writer.writerow([message, '', '', '', '', '', ''])
-                f.write('\n')
-                f.write(DISCLAIMER)
-            
+
             logger.info(f"Generated fallback CSV file: {csv_path}")
             return str(csv_path)
             

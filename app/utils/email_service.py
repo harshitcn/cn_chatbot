@@ -78,11 +78,11 @@ or engage with families in the community.
 Please review each event independently for accuracy, appropriateness, and suitability 
 before deciding to participate.
 
-"DISCLAIMER:\n"
-    "Events listed here are sourced from publicly available online information. "
-    "Code Ninjas does not endorse or verify any event, organizer, venue, or activity. "
-    "Franchisees should independently evaluate the accuracy, appropriateness, and suitability "
-    "of each event before participating."
+DISCLAIMER:
+Events listed here are sourced from publicly available online information.
+Code Ninjas does not endorse or verify any event, organizer, venue, or activity.
+Franchisees should independently evaluate the accuracy, appropriateness, and suitability 
+of each event before participating.
 
 Best regards,
 CodeNinjas
