@@ -15,6 +15,7 @@ from app.utils.location_detector import LocationDetector
 from app.utils.location_api import LocationAPIClient
 from app.utils.data_api_client import DataAPIClient
 from app.utils.api_query_engine import APIQueryEngine
+from app.utils.llm_client import LLMClient
 
 
 class FAQRetriever:
@@ -45,6 +46,7 @@ class FAQRetriever:
         self.location_api_client = LocationAPIClient()
         self.data_api_client = DataAPIClient()
         self.api_query_engine = APIQueryEngine(self.data_api_client)
+        self.llm_client = LLMClient()
         self._initialize_vector_store()
     
     def _initialize_vector_store(self):
@@ -249,6 +251,29 @@ class FAQRetriever:
                         return faq_answer
         
         return None
+    
+    def _generate_codeninjas_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
+        """
+        Generate a prompt for CodeNinjas website queries using Grok LLM.
+        
+        Args:
+            question: User's question string
+            location_slug: Optional location slug for context
+            
+        Returns:
+            str: Formatted prompt for Grok LLM
+        """
+        base_prompt = f"""You are a helpful AI assistant for CodeNinjas, a coding education center for kids. Your role is to answer questions about CodeNinjas services, programs, camps, events, locations, and general inquiries.
+
+User Question: {question}"""
+
+        if location_slug:
+            # Add location context if available
+            base_prompt += f"\n\nLocation Context: This question is about the CodeNinjas location: {location_slug}"
+        
+        base_prompt += """\n\nPlease provide a helpful, accurate, and friendly response about CodeNinjas. If you don't have specific information about the question, provide general information about CodeNinjas or suggest how the user can get more information."""
+        
+        return base_prompt
     
     async def get_answer(self, question: str, location_slug: Optional[str] = None) -> str:
         """
@@ -499,6 +524,7 @@ class FAQRetriever:
         
         logger.info(f"Tier 3: Using API-based data extraction. location_slug='{location_slug}', location_name='{location_name}', location_for_tier3='{location_for_tier3}'")
         
+        api_failed = False
         if location_for_tier3:
             # If location_slug was provided, prioritize API calls for that location
             if location_slug:
@@ -519,10 +545,37 @@ class FAQRetriever:
                     return answer
                 else:
                     logger.warning(f"API did not return data for location '{location_to_use}'")
+                    api_failed = True
             except Exception as e:
                 logger.warning(f"Error fetching data from API for location '{location_to_use}': {str(e)}, trying fallback...")
+                api_failed = True
         else:
             logger.info("Tier 3: No location provided, skipping location-based API calls")
+            api_failed = True
+        
+        # TIER 4: Fallback to Grok LLM when API fails
+        if api_failed:
+            logger.info("Tier 4: API failed or no location provided, attempting Grok LLM fallback...")
+            # Check if LLM client is configured
+            if not self.llm_client.api_key or not self.llm_client.api_url:
+                logger.warning(f"Tier 4: LLM client not configured - api_key: {'present' if self.llm_client.api_key else 'missing'}, api_url: {'present' if self.llm_client.api_url else 'missing'}")
+            else:
+                logger.info(f"Tier 4: LLM client configured - provider: {self.llm_client.provider}, api_url: {self.llm_client.api_url[:50]}...")
+                try:
+                    # Generate prompt for CodeNinjas website query
+                    prompt = self._generate_codeninjas_prompt(question, location_slug)
+                    logger.info(f"Querying Grok LLM with user question: {question[:100]}...")
+                    
+                    # Query Grok LLM
+                    llm_response = await self.llm_client.query_llm(prompt)
+                    
+                    if llm_response and llm_response.strip():
+                        logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} characters)")
+                        return llm_response.strip()
+                    else:
+                        logger.warning("Grok LLM returned empty response")
+                except Exception as e:
+                    logger.error(f"Error querying Grok LLM: {str(e)}", exc_info=True)
         
         # If all tiers fail, return default response
         logger.info("All tiers exhausted, returning default response")
