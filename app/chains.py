@@ -263,7 +263,13 @@ class FAQRetriever:
         Returns:
             str: Formatted prompt for Grok LLM
         """
-        base_prompt = f"""You are a helpful AI assistant for CodeNinjas, a coding education center for kids. Your role is to answer questions about CodeNinjas services, programs, camps, events, locations, and general inquiries.
+        base_prompt = f"""You are a helpful AI assistant for CodeNinjas, a coding education center for kids. Answer the user's question concisely and directly.
+
+IMPORTANT INSTRUCTIONS:
+- Keep your response SHORT and MEANINGFUL (2-4 sentences maximum)
+- Answer ONLY what was asked - do not provide extra information
+- Be specific and direct
+- If you don't know the answer, say so briefly
 
 User Question: {question}"""
 
@@ -271,7 +277,7 @@ User Question: {question}"""
             # Add location context if available
             base_prompt += f"\n\nLocation Context: This question is about the CodeNinjas location: {location_slug}"
         
-        base_prompt += """\n\nPlease provide a helpful, accurate, and friendly response about CodeNinjas. If you don't have specific information about the question, provide general information about CodeNinjas or suggest how the user can get more information."""
+        base_prompt += """\n\nProvide a concise, direct answer to the question above. Do not include unnecessary details or general information."""
         
         return base_prompt
     
