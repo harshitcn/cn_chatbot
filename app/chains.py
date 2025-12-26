@@ -284,10 +284,11 @@ User Question: {question}"""
     async def get_answer(self, question: str, location_slug: Optional[str] = None) -> str:
         """
         Get answer to a user question using improved multi-tier approach:
-        1. Check predefined Q&A (exact/precise matching) - only return if it's a string answer (not menu/list)
-        2. Check FAQ list with exact text matching first
-        3. Check FAQ list with semantic search
-        4. Use API-based data extraction for location-specific queries
+        1. Check for "Go back to main menu" queries - return welcome message
+        2. Check predefined Q&A (exact/precise matching) - only return if it's a string answer (not menu/list)
+        3. Check FAQ list with exact text matching first
+        4. Check FAQ list with semantic search
+        5. Use API-based data extraction for location-specific queries
         
         Args:
             question: User's question string
@@ -300,6 +301,37 @@ User Question: {question}"""
         
         # Default response when no relevant answer is found
         DEFAULT_RESPONSE = "I'm sorry, I don't have information about that. Please try asking about our services, programs, or locations, or contact our support team for assistance."
+        
+        # Check for "Go back to main menu" queries - return welcome message
+        normalized_question = normalize_question(question)
+        # Specific menu-related phrases that indicate user wants to go back
+        menu_phrases = [
+            "go back to main menu",
+            "go back to the main menu",
+            "back to main menu",
+            "return to main menu",
+            "return to the main menu",
+            "go back to menu",
+            "back to menu",
+            "main menu",
+            "start over",
+            "go home"
+        ]
+        
+        # Check if the question matches any menu-related phrase
+        # Also check for standalone "home" or "menu" if the question is very short
+        question_length = len(normalized_question.split())
+        if question_length <= 3:
+            # For short questions, also check for single words
+            if normalized_question in ["home", "menu", "back"]:
+                logger.info("User requested to go back to main menu (short query), returning welcome message")
+                return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['Parent/Guardian', 'Existing Franchise Owner','Franchise Staff', 'Potential Franchisee Owner', 'Something else/just browsing']"
+        
+        # Check for menu-related phrases in longer questions
+        if any(phrase in normalized_question for phrase in menu_phrases):
+            logger.info("User requested to go back to main menu, returning welcome message")
+            # Return the welcome message
+            return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['Parent/Guardian', 'Existing Franchise Owner','Franchise Staff', 'Potential Franchisee Owner', 'Something else/just browsing']"
         
         # TIER 1: Check predefined Q&A first (exact/precise matching)
         logger.info("Tier 1: Checking predefined Q&A...")
