@@ -252,6 +252,37 @@ class FAQRetriever:
         
         return None
     
+    def _truncate_response(self, response: str, max_words: int = 50) -> str:
+        """
+        Truncate a response to ensure it stays within word limit.
+        
+        Args:
+            response: The response string to truncate
+            max_words: Maximum number of words allowed (default: 50)
+            
+        Returns:
+            str: Truncated response
+        """
+        if not response:
+            return response
+        
+        words = response.strip().split()
+        if len(words) <= max_words:
+            return response.strip()
+        
+        # Truncate to max_words and add ellipsis if needed
+        truncated = ' '.join(words[:max_words])
+        # Remove trailing incomplete sentence if it ends with a comma or lowercase letter
+        if truncated[-1] in [',', '.'] or truncated[-1].islower():
+            # Try to find the last complete sentence
+            last_period = truncated.rfind('.')
+            if last_period > max_words * 0.6:  # If period is in last 40% of text
+                truncated = truncated[:last_period + 1]
+            else:
+                truncated = truncated.rstrip(',.') + '.'
+        
+        return truncated.strip()
+    
     def _generate_codeninjas_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
         """
         Generate a prompt for CodeNinjas website queries using Grok LLM.
@@ -263,21 +294,23 @@ class FAQRetriever:
         Returns:
             str: Formatted prompt for Grok LLM
         """
-        base_prompt = f"""You are a helpful AI assistant for CodeNinjas, a coding education center for kids. Answer the user's question concisely and directly.
+        base_prompt = f"""You are a concise AI assistant for CodeNinjas. Answer the user's question in the SHORTEST way possible.
 
-IMPORTANT INSTRUCTIONS:
-- Keep your response SHORT and MEANINGFUL (2-4 sentences maximum)
-- Answer ONLY what was asked - do not provide extra information
-- Be specific and direct
-- If you don't know the answer, say so briefly
+CRITICAL RULES - STRICTLY FOLLOW:
+- Maximum 2-3 sentences OR 50 words - whichever is shorter
+- Answer ONLY the specific question asked - nothing else
+- NO introductory phrases, NO explanations, NO additional context
+- NO "Here's...", "Let me...", "I can...", "Sure!" - just answer directly
+- If you don't know, say "I don't have that information" (one sentence only)
+- Be direct and factual - cut straight to the answer
 
 User Question: {question}"""
 
         if location_slug:
             # Add location context if available
-            base_prompt += f"\n\nLocation Context: This question is about the CodeNinjas location: {location_slug}"
+            base_prompt += f"\n\nLocation: {location_slug}"
         
-        base_prompt += """\n\nProvide a concise, direct answer to the question above. Do not include unnecessary details or general information."""
+        base_prompt += """\n\nAnswer the question above in the shortest possible way. Maximum 50 words. No extra information."""
         
         return base_prompt
     
@@ -579,8 +612,10 @@ User Question: {question}"""
                 
                 if response.get('status') == 'success' and response.get('answer'):
                     answer = response.get('answer', '')
-                    logger.info(f"Successfully got answer from API for location '{location_to_use}' (found {response.get('count', 0)} items)")
-                    return answer
+                    # Truncate API response to ensure it's concise (max 50 words)
+                    truncated_answer = self._truncate_response(answer, max_words=50)
+                    logger.info(f"Successfully got answer from API for location '{location_to_use}' (found {response.get('count', 0)} items, {len(answer)} chars -> {len(truncated_answer)} chars after truncation)")
+                    return truncated_answer
                 else:
                     logger.warning(f"API did not return data for location '{location_to_use}'")
                     api_failed = True
@@ -608,8 +643,10 @@ User Question: {question}"""
                     llm_response = await self.llm_client.query_llm(prompt)
                     
                     if llm_response and llm_response.strip():
-                        logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} characters)")
-                        return llm_response.strip()
+                        # Truncate response to ensure it's concise (max 50 words)
+                        truncated_response = self._truncate_response(llm_response.strip(), max_words=50)
+                        logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} chars -> {len(truncated_response)} chars after truncation)")
+                        return truncated_response
                     else:
                         logger.warning("Grok LLM returned empty response")
                 except Exception as e:
