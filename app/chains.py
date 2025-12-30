@@ -3,6 +3,7 @@ LangChain chains and retrieval logic.
 Handles the semantic search and answer retrieval from FAQ data.
 """
 import logging
+import re
 from typing import List, Optional, Dict, Any
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -237,7 +238,7 @@ class FAQRetriever:
             # Check for exact match
             if normalized_question == faq_normalized:
                 logger.info(f"Exact text match found in FAQ: {faq_question[:100]}")
-                return faq_answer
+                return self._format_urls_as_clickable(faq_answer)
             
             # Check if user question is contained in FAQ question or vice versa
             if normalized_question in faq_normalized or faq_normalized in normalized_question:
@@ -248,7 +249,7 @@ class FAQRetriever:
                     overlap_ratio = len(common_words) / shorter_len
                     if overlap_ratio >= 0.7:
                         logger.info(f"High overlap text match found in FAQ: {faq_question[:100]} (overlap: {overlap_ratio:.2%})")
-                        return faq_answer
+                        return self._format_urls_as_clickable(faq_answer)
         
         return None
     
@@ -282,6 +283,56 @@ class FAQRetriever:
                 truncated = truncated.rstrip(',.') + '.'
         
         return truncated.strip()
+    
+    def _format_urls_as_clickable(self, text: str) -> str:
+        """
+        Detect URLs in text and format them as clickable markdown links.
+        
+        Args:
+            text: The text string that may contain URLs
+            
+        Returns:
+            str: Text with URLs formatted as markdown links [text](url)
+        """
+        if not text:
+            return text
+        
+        # Skip if text already contains markdown links (avoid double-formatting)
+        if '](' in text and 'http' in text:
+            # Check if it's already formatted as markdown link
+            if re.search(r'\[.*?\]\(https?://', text):
+                return text
+        
+        # URL pattern: matches http://, https://, www., and domains with common TLDs
+        # Pattern breakdown:
+        # - https?://[^\s<>"{}|\\^`\[\]]+ : URLs with protocol
+        # - www\.[^\s<>"{}|\\^`\[\]]+ : www. URLs
+        # - [a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,})[^\s<>"{}|\\^`\[\]]* : domain names
+        url_pattern = r'(https?://[^\s<>"{}|\\^`\[\]]+|www\.[^\s<>"{}|\\^`\[\]]+|[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,})(/[^\s<>"{}|\\^`\[\]]*)?)'
+        
+        def replace_url(match):
+            url = match.group(0).rstrip('.,;:!?)')  # Remove trailing punctuation
+            original_url = url
+            
+            # Ensure URL has protocol
+            if url.startswith('www.'):
+                url = 'https://' + url
+            elif not url.startswith(('http://', 'https://')):
+                # Check if it looks like a domain (has TLD)
+                if '.' in url and not url.startswith('.'):
+                    url = 'https://' + url
+                else:
+                    return match.group(0)  # Return as-is if not a valid URL
+            
+            # Create markdown link - use the URL as both text and link
+            # Add back trailing punctuation if it was removed
+            trailing_punct = match.group(0)[len(original_url):]
+            return f'[{url}]({url}){trailing_punct}'
+        
+        # Replace URLs with markdown links
+        formatted_text = re.sub(url_pattern, replace_url, text)
+        
+        return formatted_text
     
     def _generate_codeninjas_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
         """
@@ -389,8 +440,8 @@ User Question: {question}"""
                 import json
                 logger.info("Predefined Q&A returned menu options")
                 return json.dumps(predefined_answer)
-            # Return string answer directly
-            return predefined_answer
+            # Return string answer directly with URL formatting
+            return self._format_urls_as_clickable(predefined_answer)
         
         logger.info("No match found in predefined Q&A, proceeding to FAQ search...")
         
@@ -399,7 +450,7 @@ User Question: {question}"""
         exact_match_answer = self._exact_text_match_in_faq(question)
         if exact_match_answer:
             logger.info("Found answer via exact text matching in FAQ")
-            return exact_match_answer
+            return self._format_urls_as_clickable(exact_match_answer)
         
         # TIER 2b: Check FAQ list (semantic search)
         logger.info("Tier 2b: Checking FAQ list with semantic search...")
@@ -572,7 +623,7 @@ User Question: {question}"""
                     # Additional check: if answer is empty or too short, return default
                     if answer and len(answer.strip()) > 10:
                         logger.info(f"Found answer in FAQ list with score {best_score:.4f} and {best_keyword_overlap:.2%} keyword overlap")
-                        return answer
+                        return self._format_urls_as_clickable(answer)
                     else:
                         logger.info(f"Answer found but too short or empty, proceeding to API calls. Score: {best_score}")
                 else:
@@ -614,8 +665,10 @@ User Question: {question}"""
                     answer = response.get('answer', '')
                     # Truncate API response to ensure it's concise (max 50 words)
                     truncated_answer = self._truncate_response(answer, max_words=50)
-                    logger.info(f"Successfully got answer from API for location '{location_to_use}' (found {response.get('count', 0)} items, {len(answer)} chars -> {len(truncated_answer)} chars after truncation)")
-                    return truncated_answer
+                    # Format URLs as clickable links
+                    formatted_answer = self._format_urls_as_clickable(truncated_answer)
+                    logger.info(f"Successfully got answer from API for location '{location_to_use}' (found {response.get('count', 0)} items, {len(answer)} chars -> {len(formatted_answer)} chars after formatting)")
+                    return formatted_answer
                 else:
                     logger.warning(f"API did not return data for location '{location_to_use}'")
                     api_failed = True
@@ -645,8 +698,10 @@ User Question: {question}"""
                     if llm_response and llm_response.strip():
                         # Truncate response to ensure it's concise (max 50 words)
                         truncated_response = self._truncate_response(llm_response.strip(), max_words=50)
-                        logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} chars -> {len(truncated_response)} chars after truncation)")
-                        return truncated_response
+                        # Format URLs as clickable links
+                        formatted_response = self._format_urls_as_clickable(truncated_response)
+                        logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} chars -> {len(formatted_response)} chars after formatting)")
+                        return formatted_response
                     else:
                         logger.warning("Grok LLM returned empty response")
                 except Exception as e:
@@ -654,7 +709,7 @@ User Question: {question}"""
         
         # If all tiers fail, return default response
         logger.info("All tiers exhausted, returning default response")
-        return DEFAULT_RESPONSE
+        return self._format_urls_as_clickable(DEFAULT_RESPONSE)
 
 
 # Global retriever instance (initialized lazily)
