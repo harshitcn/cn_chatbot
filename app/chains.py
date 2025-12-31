@@ -286,22 +286,21 @@ class FAQRetriever:
     
     def _format_urls_as_clickable(self, text: str) -> str:
         """
-        Detect URLs in text and format them as clickable markdown links.
+        Detect URLs in text and ensure they are properly formatted as clickable URLs.
         
         Args:
             text: The text string that may contain URLs
             
         Returns:
-            str: Text with URLs formatted as markdown links [text](url)
+            str: Text with URLs formatted (just the URL, no markdown brackets)
         """
         if not text:
             return text
         
         # Skip if text already contains markdown links (avoid double-formatting)
         if '](' in text and 'http' in text:
-            # Check if it's already formatted as markdown link
-            if re.search(r'\[.*?\]\(https?://', text):
-                return text
+            # Remove markdown format and keep just the URL
+            text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\2', text)
         
         # URL pattern: matches http://, https://, www., and domains with common TLDs
         # Pattern breakdown:
@@ -324,12 +323,12 @@ class FAQRetriever:
                 else:
                     return match.group(0)  # Return as-is if not a valid URL
             
-            # Create markdown link - use the URL as both text and link
+            # Return just the URL (no markdown brackets) - most UIs will make it clickable automatically
             # Add back trailing punctuation if it was removed
             trailing_punct = match.group(0)[len(original_url):]
-            return f'[{url}]({url}){trailing_punct}'
+            return f'{url}{trailing_punct}'
         
-        # Replace URLs with markdown links
+        # Replace URLs - ensure they have proper protocol
         formatted_text = re.sub(url_pattern, replace_url, text)
         
         return formatted_text
