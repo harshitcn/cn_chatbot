@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     location_api_key: str = ""  # API key for location APIs (optional)
     
     # Data API settings (Tier 3) - loaded from environment file
-    data_api_base_url: str = "https://services.codeninjas.com/api/v1"  # Base URL for data APIs (camps, programs, events, etc.)
+    data_api_base_url: str = "https://code-ninjas-public-api-uat.azurewebsites.net/api/v1"  # Base URL for data APIs (camps, programs, events, etc.)
     data_api_key: str = ""  # Optional API key for data APIs
     
     # LLM API settings for event discovery
