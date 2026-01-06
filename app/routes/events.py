@@ -200,24 +200,69 @@ async def process_batch_run(run_id: str, centers: list, send_emails: bool):
         
         # Send emails if requested
         if send_emails:
+            from app.config import get_settings
+            settings = get_settings()
+            
             logger.info(f"Sending emails for batch run {run_id}...")
+            logger.info(f"Email mode: send_to_owners={settings.email_send_to_owners}, test_recipient={settings.email_test_recipient}")
+            logger.info(f"Email service enabled: {email_service.enabled}")
+            if not email_service.enabled:
+                logger.warning("⚠️  Email service is not configured! Check EMAIL_SMTP_HOST, EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD, and EMAIL_FROM settings.")
+            
             email_reports = []
             for result in results:
-                if result.status == "success" and result.csv_path:
+                # Send email if CSV was generated (even if no events or errors occurred)
+                if result.csv_path:
                     # Try to get email from center info
                     center = next((c for c in centers if c.center_id == result.center_id), None)
-                    if center and center.owner_email:
-                        email_reports.append({
-                            "recipient_email": center.owner_email,
-                            "csv_path": result.csv_path,
-                            "center_name": result.center_name,
-                            "event_count": result.event_count,
-                            "radius": center.radius,
-                            "location": f"{center.city or ''}, {center.state or ''}".strip()
-                        })
+                    
+                    # Determine recipient email based on settings
+                    if settings.email_send_to_owners:
+                        # Send to center owner
+                        recipient_email = center.owner_email if center else None
+                        if not recipient_email:
+                            logger.warning(f"No owner email for center {result.center_id}, skipping email")
+                            continue
+                    else:
+                        # Send to test email
+                        recipient_email = settings.email_test_recipient
+                        if not recipient_email:
+                            logger.warning("Email test mode enabled but EMAIL_TEST_RECIPIENT not set, skipping email")
+                            continue
+                        logger.info(f"Test mode: Sending email for center {result.center_name} to test recipient {recipient_email}")
+                    
+                    # Create subject with test mode indicator if needed
+                    subject = None
+                    if not settings.email_send_to_owners:
+                        subject = f"[TEST] Code Ninjas {result.center_name} - Local Events Report"
+                    
+                    # Add status indicator to subject if no events or error occurred
+                    if result.status != "success" or result.event_count == 0:
+                        if subject:
+                            subject = subject.replace(" - Local Events Report", " - Local Events Report (No Events Found)")
+                        else:
+                            subject = f"Code Ninjas {result.center_name} - Local Events Report (No Events Found)"
+                    
+                    email_reports.append({
+                        "recipient_email": recipient_email,
+                        "csv_path": result.csv_path,
+                        "center_name": result.center_name,
+                        "event_count": result.event_count,
+                        "radius": center.radius if center else 5,
+                        "location": f"{center.city or ''}, {center.state or ''}".strip() if center else "Unknown",
+                        "subject": subject
+                    })
+                else:
+                    logger.warning(f"No CSV generated for center {result.center_id} ({result.center_name}), skipping email. Status: {result.status}, Message: {result.message}")
             
             if email_reports:
-                email_service.send_batch_reports(email_reports)
+                logger.info(f"Preparing to send {len(email_reports)} email(s) for batch run {run_id}")
+                email_result = email_service.send_batch_reports(email_reports)
+                logger.info(f"Email send result: {email_result['success_count']} succeeded, {email_result['failed_count']} failed for batch run {run_id}")
+                if email_result['failed_count'] > 0:
+                    logger.warning(f"⚠️  {email_result['failed_count']} email(s) failed to send. Check email configuration and logs above for details.")
+            else:
+                logger.warning(f"No email reports generated for batch run {run_id} - check if CSV files were generated for centers")
         
         logger.info(f"Batch run {run_id} completed")
         
@@ -257,6 +302,7 @@ async def discover_events(request: EventDiscoveryRequest) -> EventDiscoveryRespo
         result = await discover_events_for_center(center)
         
         # Send email if requested and email address provided
+        # Always send email if CSV was generated, even if no events found or errors occurred
         email_sent = False
         email_message = None
         
@@ -270,14 +316,20 @@ async def discover_events(request: EventDiscoveryRequest) -> EventDiscoveryRespo
                     location_parts.append(request.state)
                 location = ", ".join(location_parts) if location_parts else request.zip_code or "Unknown"
                 
-                logger.info(f"Sending email to {request.owner_email} for center {request.center_name}")
+                # Create subject with status indicator if no events or error
+                subject = None
+                if result.status != "success" or result.event_count == 0:
+                    subject = f"Code Ninjas {request.center_name} - Local Events Report (No Events Found)"
+                
+                logger.info(f"Sending email to {request.owner_email} for center {request.center_name} (Status: {result.status}, Events: {result.event_count})")
                 email_sent = email_service.send_events_report(
                     recipient_email=request.owner_email,
                     csv_path=result.csv_path,
                     center_name=request.center_name,
                     event_count=result.event_count,
                     radius=request.radius,
-                    location=location
+                    location=location,
+                    subject=subject
                 )
                 
                 if email_sent:

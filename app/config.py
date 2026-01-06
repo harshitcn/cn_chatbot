@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     email_smtp_password: str = ""  # SMTP password
     email_from: str = ""  # From email address
     email_use_tls: bool = True  # Use TLS for SMTP
+    email_send_to_owners: bool = False  # If False, send to test email instead of center owners
+    email_test_recipient: str = ""  # Test email address (used when email_send_to_owners=False)
+    test_mode_limit_centers: int = "" # Limit number of centers to process in stage environment (0 = no limit)
+    sync_to_database: bool = False  # If True, sync centers to database and use database. If False, fetch directly from APIs
+    
+    # Cron job settings
+    cron_enabled: bool = False  # Enable/disable cron jobs
+    cron_schedule: str = ""  # Cron expression (default: every 5 minutes)
+    # Format: minute hour day month day_of_week
+    # Examples:
+    # - "*/5 * * * *" = Every 5 minutes
+    # - "0 2 * * *" = Daily at 2 AM
+    # - "0 */6 * * *" = Every 6 hours
+    # - "0 0 * * 0" = Weekly on Sunday at midnight
     
     model_config = SettingsConfigDict(
         env_file=".env",

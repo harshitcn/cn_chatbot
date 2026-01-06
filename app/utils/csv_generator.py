@@ -114,11 +114,12 @@ class CSVGenerator:
         message: str = "No events found or AI failed for this run."
     ) -> str:
         """
-        Generate a fallback CSV when no events are found or AI fails.
+        Generate an empty CSV with headers only when no events are found or AI fails.
+        This ensures emails are always sent with a CSV file, even when there's no data.
         
         Args:
             center_name: Name of the center
-            message: Message to include in the CSV
+            message: Message for logging (not included in CSV)
             
         Returns:
             str: Path to the generated CSV file
@@ -135,16 +136,40 @@ class CSVGenerator:
         csv_path = date_dir / filename
         
         try:
+            # Write CSV file with UTF-8 encoding - headers only, no data rows
             with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerow(['Event Name', 'Event Date', 'Event Website / URL', 
-                               'Location', 'Organizer Contact Information', 'Fees (if any)', 'Notes'])
-                writer.writerow([message, '', '', '', '', '', ''])
+                # Define CSV columns (same as generate_csv)
+                fieldnames = [
+                    'Event Name',
+                    'Event Date',
+                    'Event Website / URL',
+                    'Location',
+                    'Organizer Contact Information',
+                    'Fees (if any)',
+                    'Notes'
+                ]
+                
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                # No data rows - just headers
 
-            logger.info(f"Generated fallback CSV file: {csv_path}")
+            logger.info(f"Generated empty CSV file with headers only: {csv_path} (Reason: {message})")
             return str(csv_path)
             
         except Exception as e:
             logger.error(f"Error generating fallback CSV file: {str(e)}", exc_info=True)
             raise
+    
+    def generate_empty_csv(self, center_name: str) -> str:
+        """
+        Generate an empty CSV with headers only (alias for generate_fallback_csv).
+        This is a convenience method for generating empty CSVs.
+        
+        Args:
+            center_name: Name of the center
+            
+        Returns:
+            str: Path to the generated CSV file
+        """
+        return self.generate_fallback_csv(center_name, "No events data available")
 
