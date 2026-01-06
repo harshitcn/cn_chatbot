@@ -284,6 +284,85 @@ class FAQRetriever:
         
         return truncated.strip()
     
+    def _is_api_response_relevant(self, question: str, api_response: Dict[str, Any]) -> bool:
+        """
+        Check if the API response is relevant to the user's question.
+        
+        Args:
+            question: User's question string
+            api_response: API response dictionary with 'data_type' and 'answer' fields
+            
+        Returns:
+            bool: True if response is relevant, False otherwise
+        """
+        logger = logging.getLogger(__name__)
+        
+        if not api_response or api_response.get('status') != 'success':
+            return False
+        
+        data_type = api_response.get('data_type', '')
+        answer = api_response.get('answer', '')
+        question_lower = question.lower()
+        
+        # Define topic keywords for each data type
+        topic_keywords = {
+            'camps': ['camp', 'camps', 'upcoming camp', 'camp schedule', 'summer camp', 'winter camp'],
+            'events': ['event', 'events', 'upcoming event', 'upcoming events', 'happening'],
+            'clubs': ['club', 'clubs'],
+            'programs': ['program', 'programs', 'create', 'academy', 'academies', 'jr', 'coding program'],
+            'facility': ['facility', 'location', 'address', 'contact', 'info', 'about', 'phone', 'email', 'hours'],
+            'general': []  # General is a fallback, check if question matches any specific topic
+        }
+        
+        # Check if question contains keywords related to the returned data type
+        if data_type in topic_keywords:
+            keywords = topic_keywords[data_type]
+            if keywords:
+                # If data_type has specific keywords, check if question contains them
+                question_has_keywords = any(keyword in question_lower for keyword in keywords)
+                if question_has_keywords:
+                    logger.info(f"API response is relevant: data_type='{data_type}' matches question keywords")
+                    return True
+                else:
+                    # Question doesn't match the data type - not relevant
+                    logger.info(f"API response is NOT relevant: data_type='{data_type}' but question doesn't contain related keywords")
+                    return False
+        
+        # For 'general' data type, check if question is asking about something specific
+        # that doesn't match camps/programs/events/clubs/facility
+        if data_type == 'general':
+            # Check if question is about franchise, ownership, business, etc. (not location-specific data)
+            business_keywords = ['franchise', 'ownership', 'owner', 'business', 'invest', 'investment', 
+                               'franchisee', 'franchisor', 'opportunity', 'cost', 'price', 'fee',
+                               'requirements', 'qualifications', 'apply', 'application']
+            
+            question_has_business_keywords = any(keyword in question_lower for keyword in business_keywords)
+            
+            # If question is about business/franchise but API returned general location data (likely camps)
+            if question_has_business_keywords:
+                logger.info(f"API response is NOT relevant: question is about business/franchise but API returned general location data")
+                return False
+            
+            # If answer contains "UPCOMING CAMPS" but question doesn't mention camps, it's not relevant
+            if 'UPCOMING CAMPS' in answer.upper() or 'camp' in answer.lower():
+                if 'camp' not in question_lower:
+                    logger.info(f"API response is NOT relevant: answer contains camps but question doesn't mention camps")
+                    return False
+        
+        # If we get here and data_type is general, it might be relevant (default location info)
+        # But if answer is about camps and question isn't, it's not relevant
+        if 'camp' in answer.lower() and 'camp' not in question_lower:
+            # Check if question is about something else entirely
+            other_topics = ['franchise', 'ownership', 'program', 'event', 'club', 'facility', 
+                          'contact', 'address', 'phone', 'email', 'hours']
+            if any(topic in question_lower for topic in other_topics):
+                logger.info(f"API response is NOT relevant: answer is about camps but question is about something else")
+                return False
+        
+        # Default: assume relevant if we can't determine otherwise
+        logger.info(f"API response assumed relevant: data_type='{data_type}'")
+        return True
+    
     def _format_urls_as_clickable(self, text: str) -> str:
         """
         Detect URLs in text and ensure they are properly formatted as clickable URLs.
@@ -661,13 +740,21 @@ User Question: {question}"""
                 response = await self.api_query_engine.answer_query(question, location_to_use)
                 
                 if response.get('status') == 'success' and response.get('answer'):
-                    answer = response.get('answer', '')
-                    # Truncate API response to ensure it's concise (max 50 words)
-                    truncated_answer = self._truncate_response(answer, max_words=50)
-                    # Format URLs as clickable links
-                    formatted_answer = self._format_urls_as_clickable(truncated_answer)
-                    logger.info(f"Successfully got answer from API for location '{location_to_use}' (found {response.get('count', 0)} items, {len(answer)} chars -> {len(formatted_answer)} chars after formatting)")
-                    return formatted_answer
+                    # Check if the API response is relevant to the question
+                    is_relevant = self._is_api_response_relevant(question, response)
+                    
+                    if is_relevant:
+                        answer = response.get('answer', '')
+                        # Truncate API response to ensure it's concise (max 50 words)
+                        truncated_answer = self._truncate_response(answer, max_words=50)
+                        # Format URLs as clickable links
+                        formatted_answer = self._format_urls_as_clickable(truncated_answer)
+                        logger.info(f"Successfully got relevant answer from API for location '{location_to_use}' (found {response.get('count', 0)} items, {len(answer)} chars -> {len(formatted_answer)} chars after formatting)")
+                        return formatted_answer
+                    else:
+                        # API returned data but it's not relevant to the question - proceed to LLM tier
+                        logger.info(f"API returned data for location '{location_to_use}' but it's not relevant to the question. Proceeding to LLM tier.")
+                        api_failed = True
                 else:
                     logger.warning(f"API did not return data for location '{location_to_use}'")
                     api_failed = True

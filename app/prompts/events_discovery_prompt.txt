@@ -31,8 +31,3 @@ Fees (if any)
 Notes
 
 Duplicates across months are acceptable. If certain information is missing, include the event anyway and note what could not be found.
-
-At the end, include this disclaimer text:
-
-"Events listed here are sourced from publicly available online information. Code Ninjas does not endorse or verify any event, organizer, venue, or activity. Franchisees should independently evaluate the accuracy, appropriateness, and suitability of each event before participating."
-
