@@ -37,12 +37,21 @@ class Settings(BaseSettings):
     
     # LLM API settings for event discovery
     llm_api_key: str = ""  # API key for LLM (Grok, OpenAI, etc.)
-    llm_api_url: str = ""  # API endpoint URL
-    llm_provider: str = "grok"  # LLM provider: 'grok', 'openai', etc.
-    llm_model: str = "grok-beta"  # Model name to use
+    llm_api_url: str = "https://api.openai.com/v1/chat/completions"  # API endpoint URL (default: OpenAI)
+    llm_provider: str = "openai"  # LLM provider: 'grok', 'openai', etc.
+    # Cost-effective models that support function calling (web search):
+    # - gpt-4o-mini: $0.15/$0.60 per 1M tokens (RECOMMENDED - cheapest with good quality, supports web search)
+    # - gpt-3.5-turbo: $0.50/$1.50 per 1M tokens (cheaper but older, less capable, also supports web search)
+    # - gpt-4o: $2.50/$10.00 per 1M tokens (more expensive but better quality)
+    # Note: All OpenAI models support function calling for web search when WEB_SEARCH_ENABLED=true
+    llm_model: str = "gpt-4.1-mini"  # Model name to use (gpt-4o-mini is the cheapest option with web search support)
     llm_timeout: float = 180.0  # LLM API timeout in seconds (default: 180s / 3 minutes)
     llm_max_tokens: int = 8000  # Maximum tokens for LLM response (default: 8000 for comprehensive results)
     llm_temperature: float = 0.8  # Temperature for LLM (default: 0.8 for more comprehensive searching)
+    
+    # Web search settings (for OpenAI models that need web search)
+    # Web search uses DuckDuckGo (free, no API key required) via function calling
+    web_search_enabled: bool = False  # Enable web search tool for OpenAI (uses DuckDuckGo, free, no API key required)
     
     # Events discovery settings
     events_storage_path: str = "data/events"  # Path to store CSV files

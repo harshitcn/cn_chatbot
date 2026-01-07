@@ -1,10 +1,11 @@
 """
 LLM client for event discovery using Grok or OpenAI-compatible APIs.
 Supports retry logic and error handling.
+Supports web search via function calling for OpenAI models.
 """
 import logging
 import httpx
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 from app.config import get_settings
 
@@ -26,6 +27,20 @@ class LLMClient:
         self.max_retries = 3
         # Get timeout from settings, default to 180 seconds (3 minutes)
         self.timeout = getattr(self.settings, 'llm_timeout', 180.0)
+        
+        # Initialize web search service if enabled
+        self.web_search_enabled = (
+            self.provider == "openai" and 
+            getattr(self.settings, 'web_search_enabled', False)
+        )
+        if self.web_search_enabled:
+            from app.utils.web_search import WebSearchService
+            self.web_search = WebSearchService()
+            if not self.web_search.enabled:
+                logger.warning("Web search requested but not properly configured. Continuing without web search.")
+                self.web_search_enabled = False
+        else:
+            self.web_search = None
         
         if not self.api_key:
             logger.warning("LLM API key not configured. Event discovery will fail.")
@@ -78,28 +93,66 @@ class LLMClient:
                 }
             ],
             "model": model_name,
-            "temperature": getattr(self.settings, 'llm_temperature', 0.8),
-            "max_tokens": getattr(self.settings, 'llm_max_tokens', 8000)
+            # "temperature": getattr(self.settings, 'llm_temperature', 0.8),
+            # "max_tokens": getattr(self.settings, 'llm_max_tokens', 8000)
         }
     
-    def _build_openai_payload(self, prompt: str) -> dict:
+    def _get_web_search_tool(self) -> Dict[str, Any]:
+        """Get web search tool definition for OpenAI function calling."""
+        return {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the internet for current information, events, and real-time data. Use this when you need to find information that may not be in your training data, such as upcoming events, current dates, or location-specific information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to find information on the internet. Be specific and include location, date range, and event type when relevant."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of search results to return (default: 10, max: 20)",
+                            "default": 10,
+                            "minimum": 1,
+                            "maximum": 20
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+    
+    def _build_openai_payload(self, prompt: str, messages: Optional[List[Dict[str, Any]]] = None) -> dict:
         """Build request payload for OpenAI API."""
         # Add current date context to emphasize upcoming events
         from datetime import datetime
         current_date = datetime.now().strftime("%B %d, %Y")
         enhanced_prompt = f"Today's date is {current_date}. {prompt}"
         
-        return {
-            "model": getattr(self.settings, 'llm_model', 'gpt-4'),
-            "messages": [
+        # Use provided messages or create new conversation
+        if messages is None:
+            messages = [
                 {
                     "role": "user",
                     "content": enhanced_prompt
                 }
-            ],
-            "temperature": getattr(self.settings, 'llm_temperature', 0.8),
-            "max_tokens": getattr(self.settings, 'llm_max_tokens', 8000)
+            ]
+        
+        payload = {
+            "model": getattr(self.settings, 'llm_model', 'gpt-4'),
+            "messages": messages,
+            # "temperature": getattr(self.settings, 'llm_temperature', 0.8),
+            # "max_tokens": getattr(self.settings, 'llm_max_tokens', 8000)
         }
+        
+        # Add tools if web search is enabled
+        if self.web_search_enabled and self.web_search and self.web_search.enabled:
+            payload["tools"] = [self._get_web_search_tool()]
+            payload["tool_choice"] = "auto"  # Let the model decide when to use the tool
+        
+        return payload
     
     def _build_payload(self, prompt: str, model_name: Optional[str] = None) -> dict:
         """Build appropriate payload based on provider."""
@@ -111,27 +164,104 @@ class LLMClient:
             # Default to OpenAI format
             return self._build_openai_payload(prompt)
     
-    def _extract_response(self, response_data: dict) -> str:
-        """Extract text response from API response."""
+    def _extract_response(self, response_data: dict) -> tuple:
+        """
+        Extract text response and function calls from API response.
+        
+        Returns:
+            tuple: (response_text, function_call_info)
+        """
         if self.provider == "grok":
             # Grok API response format
             if "choices" in response_data and len(response_data["choices"]) > 0:
-                return response_data["choices"][0].get("message", {}).get("content", "")
+                message = response_data["choices"][0].get("message", {})
+                return message.get("content", ""), None
         elif self.provider == "openai":
             # OpenAI API response format
             if "choices" in response_data and len(response_data["choices"]) > 0:
-                return response_data["choices"][0].get("message", {}).get("content", "")
+                message = response_data["choices"][0].get("message", {})
+                content = message.get("content", "")
+                tool_calls = message.get("tool_calls")
+                
+                # Check for function calls
+                if tool_calls and len(tool_calls) > 0:
+                    # Return the first tool call (we only support web_search)
+                    tool_call = tool_calls[0]
+                    if tool_call.get("function", {}).get("name") == "web_search":
+                        return content, tool_call
+                
+                return content, None
         
         # Fallback: try common patterns
         if "content" in response_data:
-            return response_data["content"]
+            return response_data["content"], None
         if "text" in response_data:
-            return response_data["text"]
+            return response_data["text"], None
         if "response" in response_data:
-            return response_data["response"]
+            return response_data["response"], None
         
         logger.warning(f"Unexpected API response format: {response_data}")
-        return ""
+        return "", None
+    
+    async def _handle_function_call(self, tool_call: Dict[str, Any], messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Handle function call by executing web search and adding results to conversation.
+        
+        Args:
+            tool_call: The tool call from OpenAI response
+            messages: Current conversation messages
+            
+        Returns:
+            Updated messages list with function call and result
+        """
+        function_name = tool_call.get("function", {}).get("name")
+        function_args_str = tool_call.get("function", {}).get("arguments", "{}")
+        
+        if function_name != "web_search":
+            logger.warning(f"Unknown function call: {function_name}")
+            return messages
+        
+        try:
+            import json
+            function_args = json.loads(function_args_str)
+            query = function_args.get("query", "")
+            max_results = function_args.get("max_results", 10)
+            
+            logger.info(f"Executing web search: {query}")
+            
+            # Perform web search (async)
+            search_results = await self.web_search.search(query, max_results=max_results)
+            
+            # Format search results
+            formatted_results = self.web_search.format_search_results(search_results)
+            
+            # Add function call and result to messages
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [tool_call]
+            })
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.get("id"),
+                "name": "web_search",
+                "content": formatted_results
+            })
+            
+            logger.info(f"Web search completed, added {len(search_results)} results to conversation")
+            
+        except Exception as e:
+            logger.error(f"Error handling function call: {str(e)}", exc_info=True)
+            # Add error message to conversation
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.get("id"),
+                "name": "web_search",
+                "content": f"Error performing web search: {str(e)}"
+            })
+        
+        return messages
     
     async def query_llm(self, prompt: str) -> Optional[str]:
         """
@@ -165,10 +295,16 @@ class LLMClient:
         
         last_error = None
         for model_index, model_name in enumerate(grok_models_to_try):
-            payload = self._build_payload(prompt, model_name)
+            # Build initial payload
+            if self.provider == "grok":
+                payload = self._build_grok_payload(prompt, model_name)
+            else:
+                payload = self._build_openai_payload(prompt)
             
             # Log request details for debugging (without exposing API key)
             logger.debug(f"LLM Request - URL: {self.api_url}, Provider: {self.provider}, Model: {payload.get('model', 'N/A')}")
+            if self.web_search_enabled:
+                logger.info("Web search tool enabled - LLM can search the internet for real-time information")
             
             for attempt in range(1, self.max_retries + 1):
                 try:
@@ -179,24 +315,52 @@ class LLMClient:
                     read_timeout = self.timeout - connect_timeout  # Rest for reading response
                     timeout_config = httpx.Timeout(connect=connect_timeout, read=read_timeout, write=30.0, pool=30.0)
                     
-                    async with httpx.AsyncClient(timeout=timeout_config) as client:
-                        response = await client.post(
-                            self.api_url,
-                            headers=headers,
-                            json=payload
-                        )
-                        response.raise_for_status()
-                        response_data = response.json()
-                        
-                        result = self._extract_response(response_data)
-                        if result:
-                            logger.info(f"Successfully received LLM response ({len(result)} characters)")
-                            return result
-                        else:
-                            logger.warning("LLM response was empty")
-                            if attempt < self.max_retries:
+                    # Handle conversation with function calls for OpenAI
+                    messages = payload.get("messages", [])
+                    max_function_calls = 5  # Limit to prevent infinite loops
+                    function_call_count = 0
+                    
+                    while function_call_count < max_function_calls:
+                        async with httpx.AsyncClient(timeout=timeout_config) as client:
+                            # Update payload with current messages
+                            current_payload = payload.copy()
+                            current_payload["messages"] = messages
+                            
+                            response = await client.post(
+                                self.api_url,
+                                headers=headers,
+                                json=current_payload
+                            )
+                            response.raise_for_status()
+                            response_data = response.json()
+                            
+                            result, tool_call = self._extract_response(response_data)
+                            
+                            # If there's a function call, execute it and continue conversation
+                            if tool_call and self.web_search_enabled and self.web_search and self.web_search.enabled:
+                                function_call_count += 1
+                                logger.info(f"Function call detected (call #{function_call_count}), executing web search...")
+                                messages = await self._handle_function_call(tool_call, messages)
+                                # Continue the conversation loop
                                 continue
-                            return None
+                            
+                            # If we have a result (no more function calls), return it
+                            if result:
+                                logger.info(f"Successfully received LLM response ({len(result)} characters)")
+                                if function_call_count > 0:
+                                    logger.info(f"Completed after {function_call_count} web search call(s)")
+                                return result
+                            else:
+                                logger.warning("LLM response was empty")
+                                if attempt < self.max_retries:
+                                    break  # Break inner loop to retry
+                                return None
+                    
+                    # If we exhausted function calls, return the last result
+                    if function_call_count >= max_function_calls:
+                        logger.warning(f"Reached maximum function calls ({max_function_calls}), returning last response")
+                        if result:
+                            return result
                             
                 except httpx.TimeoutException as e:
                     last_error = f"Timeout: {str(e)}"
