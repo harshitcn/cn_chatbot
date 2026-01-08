@@ -4,6 +4,8 @@ Supports SMTP and optional SendGrid integration.
 """
 import logging
 import smtplib
+import time
+import random
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -100,7 +102,7 @@ CodeNinjas
         subject: Optional[str] = None
     ) -> bool:
         """
-        Send event discovery report via email.
+        Send event discovery report via email with retry logic for connection issues.
         
         Args:
             recipient_email: Email address of the recipient
@@ -127,93 +129,126 @@ CodeNinjas
             logger.error(f"CSV file not found: {csv_path}")
             return False
         
-        try:
-            # Create message
-            msg = MIMEMultipart()
-            msg['From'] = self.email_from
-            msg['To'] = recipient_email
-            msg['Subject'] = subject or f"Code Ninjas {center_name} - Local Events Report"
-            
-            # Add body
-            body = self._create_email_body(center_name, event_count, radius, location)
-            msg.attach(MIMEText(body, 'plain'))
-            
-            # Attach CSV file
-            with open(csv_file, 'rb') as attachment:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(attachment.read())
-            
-            encoders.encode_base64(part)
-            part.add_header(
-                'Content-Disposition',
-                f'attachment; filename= {csv_file.name}'
-            )
-            msg.attach(part)
-            
-            # Send email
-            logger.info(f"Sending email to {recipient_email} via {self.smtp_host}:{self.smtp_port}...")
-            
-            if not self.smtp_host:
-                logger.error("EMAIL_SMTP_HOST is not configured. Cannot send email.")
-                return False
-            
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                if self.use_tls:
-                    server.starttls()
-                server.login(self.smtp_user, self.smtp_password)
-                server.send_message(msg)
-            
-            logger.info(f"Successfully sent email to {recipient_email}")
-            return True
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error sending email to {recipient_email}: {error_msg}")
-            
-            # Provide helpful error messages for common issues
-            if "getaddrinfo failed" in error_msg or "11001" in error_msg or "11002" in error_msg:
-                logger.error(f"❌ Cannot resolve SMTP host '{self.smtp_host}'")
-                logger.error(f"")
-                logger.error(f"Please check your EMAIL_SMTP_HOST setting in your .env file:")
-                logger.error(f"")
-                logger.error(f"Common SMTP server settings:")
-                logger.error(f"  Gmail:        EMAIL_SMTP_HOST=smtp.gmail.com")
-                logger.error(f"  Outlook:      EMAIL_SMTP_HOST=smtp-mail.outlook.com")
-                logger.error(f"  Office365:    EMAIL_SMTP_HOST=smtp.office365.com")
-                logger.error(f"  Yahoo:        EMAIL_SMTP_HOST=smtp.mail.yahoo.com")
-                logger.error(f"")
-                logger.error(f"Current configuration:")
-                logger.error(f"  EMAIL_SMTP_HOST: '{self.smtp_host}'")
-                logger.error(f"  EMAIL_SMTP_PORT: {self.smtp_port}")
-                logger.error(f"  EMAIL_SMTP_USER: '{self.smtp_user}'")
-                logger.error(f"  EMAIL_FROM: '{self.email_from}'")
-                logger.error(f"")
-                logger.error(f"If EMAIL_SMTP_HOST is empty or None, add it to your .env file and restart the server.")
-            elif "authentication" in error_msg.lower() or "535" in error_msg or "534" in error_msg:
-                logger.error(f"❌ SMTP authentication failed")
-                logger.error(f"Please check:")
-                logger.error(f"  1. EMAIL_SMTP_USER is correct: '{self.smtp_user}'")
-                logger.error(f"  2. EMAIL_SMTP_PASSWORD is correct")
-                logger.error(f"  3. For Gmail, use an App Password (not your regular password)")
-                logger.error(f"     Generate at: https://myaccount.google.com/apppasswords")
-            elif "connection" in error_msg.lower() or "connect" in error_msg.lower() or "timeout" in error_msg.lower():
-                logger.error(f"❌ Cannot connect to SMTP server")
-                logger.error(f"Please check:")
-                logger.error(f"  1. EMAIL_SMTP_HOST: '{self.smtp_host}'")
-                logger.error(f"  2. EMAIL_SMTP_PORT: {self.smtp_port}")
-                logger.error(f"  3. Firewall or network restrictions")
-                logger.error(f"  4. Internet connection")
-            else:
-                logger.error(f"Full error details:", exc_info=True)
-            
+        if not self.smtp_host:
+            logger.error("EMAIL_SMTP_HOST is not configured. Cannot send email.")
             return False
+        
+        # Retry logic for Gmail connection issues
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Create message
+                msg = MIMEMultipart()
+                msg['From'] = self.email_from
+                msg['To'] = recipient_email
+                msg['Subject'] = subject or f"Code Ninjas {center_name} - Local Events Report"
+                
+                # Add body
+                body = self._create_email_body(center_name, event_count, radius, location)
+                msg.attach(MIMEText(body, 'plain'))
+                
+                # Attach CSV file
+                with open(csv_file, 'rb') as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                
+                encoders.encode_base64(part)
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename= {csv_file.name}'
+                )
+                msg.attach(part)
+                
+                # Send email with fresh connection each time
+                if attempt > 1:
+                    logger.info(f"Sending email to {recipient_email} via {self.smtp_host}:{self.smtp_port} (retry attempt {attempt}/{max_retries})...")
+                else:
+                    logger.info(f"Sending email to {recipient_email} via {self.smtp_host}:{self.smtp_port}...")
+                
+                # Create fresh SMTP connection for each attempt with timeout
+                with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=30) as server:
+                    if self.use_tls:
+                        server.starttls()
+                    server.login(self.smtp_user, self.smtp_password)
+                    server.send_message(msg)
+                
+                logger.info(f"Successfully sent email to {recipient_email}")
+                return True
+                
+            except (smtplib.SMTPException, ConnectionError, OSError) as e:
+                error_msg = str(e)
+                
+                # Check if it's a connection error that might be retryable
+                if "Connection unexpectedly closed" in error_msg or "Connection" in error_msg or "timeout" in error_msg.lower():
+                    if attempt < max_retries:
+                        # Exponential backoff with jitter
+                        delay = retry_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+                        logger.warning(f"Connection error on attempt {attempt}/{max_retries}: {error_msg}")
+                        logger.info(f"Retrying in {delay:.2f} seconds...")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.error(f"Failed after {max_retries} attempts due to connection issues: {error_msg}")
+                else:
+                    # Non-retryable error, log and break
+                    logger.error(f"Non-retryable error sending email to {recipient_email}: {error_msg}")
+                    break
+                    
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error sending email to {recipient_email}: {error_msg}")
+                
+                # Provide helpful error messages for common issues
+                if "getaddrinfo failed" in error_msg or "11001" in error_msg or "11002" in error_msg:
+                    logger.error(f"❌ Cannot resolve SMTP host '{self.smtp_host}'")
+                    logger.error(f"")
+                    logger.error(f"Please check your EMAIL_SMTP_HOST setting in your .env file:")
+                    logger.error(f"")
+                    logger.error(f"Common SMTP server settings:")
+                    logger.error(f"  Gmail:        EMAIL_SMTP_HOST=smtp.gmail.com")
+                    logger.error(f"  Outlook:      EMAIL_SMTP_HOST=smtp-mail.outlook.com")
+                    logger.error(f"  Office365:    EMAIL_SMTP_HOST=smtp.office365.com")
+                    logger.error(f"  Yahoo:        EMAIL_SMTP_HOST=smtp.mail.yahoo.com")
+                    logger.error(f"")
+                    logger.error(f"Current configuration:")
+                    logger.error(f"  EMAIL_SMTP_HOST: '{self.smtp_host}'")
+                    logger.error(f"  EMAIL_SMTP_PORT: {self.smtp_port}")
+                    logger.error(f"  EMAIL_SMTP_USER: '{self.smtp_user}'")
+                    logger.error(f"  EMAIL_FROM: '{self.email_from}'")
+                    logger.error(f"")
+                    logger.error(f"If EMAIL_SMTP_HOST is empty or None, add it to your .env file and restart the server.")
+                elif "authentication" in error_msg.lower() or "535" in error_msg or "534" in error_msg:
+                    logger.error(f"❌ SMTP authentication failed")
+                    logger.error(f"Please check:")
+                    logger.error(f"  1. EMAIL_SMTP_USER is correct: '{self.smtp_user}'")
+                    logger.error(f"  2. EMAIL_SMTP_PASSWORD is correct")
+                    logger.error(f"  3. For Gmail, use an App Password (not your regular password)")
+                    logger.error(f"     Generate at: https://myaccount.google.com/apppasswords")
+                elif "connection" in error_msg.lower() or "connect" in error_msg.lower():
+                    logger.error(f"❌ Cannot connect to SMTP server")
+                    logger.error(f"Please check:")
+                    logger.error(f"  1. EMAIL_SMTP_HOST: '{self.smtp_host}'")
+                    logger.error(f"  2. EMAIL_SMTP_PORT: {self.smtp_port}")
+                    logger.error(f"  3. Firewall or network restrictions")
+                    logger.error(f"  4. Internet connection")
+                else:
+                    logger.error(f"Full error details:", exc_info=True)
+                
+                # Break on non-connection errors (don't retry)
+                break
+        
+        # If we get here, all retries failed
+        logger.error(f"Failed to send email to {recipient_email} after {max_retries} attempts")
+        return False
     
     def send_batch_reports(
         self,
         reports: List[dict]
     ) -> dict:
         """
-        Send multiple event reports in batch.
+        Send multiple event reports in batch with delays between emails to avoid rate limiting.
         
         Args:
             reports: List of dicts with keys: recipient_email, csv_path, center_name, 
@@ -228,8 +263,20 @@ CodeNinjas
         
         success_count = 0
         failed_count = 0
+        total_reports = len(reports)
         
-        for report in reports:
+        logger.info(f"Starting batch email send for {total_reports} report(s)...")
+        
+        for idx, report in enumerate(reports, 1):
+            # Add delay between emails to avoid Gmail rate limiting
+            # First email: no delay, subsequent emails: 2-3 second delay
+            if idx > 1:
+                delay = random.uniform(2.0, 3.0)  # Random delay between 2-3 seconds
+                logger.debug(f"Waiting {delay:.2f} seconds before next email to avoid rate limiting...")
+                time.sleep(delay)
+            
+            logger.info(f"Processing email {idx}/{total_reports}: {report.get('center_name', 'Unknown')}")
+            
             success = self.send_events_report(
                 recipient_email=report.get("recipient_email"),
                 csv_path=report.get("csv_path"),
@@ -245,7 +292,7 @@ CodeNinjas
             else:
                 failed_count += 1
         
-        logger.info(f"Batch email send complete: {success_count} succeeded, {failed_count} failed")
+        logger.info(f"Batch email send complete: {success_count} succeeded, {failed_count} failed out of {total_reports} total")
         return {
             "success_count": success_count,
             "failed_count": failed_count
