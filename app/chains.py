@@ -4,13 +4,22 @@ Handles the semantic search and answer retrieval from FAQ data.
 """
 import logging
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
 from app.faq_data import FAQ_DATA
-from app.predefined_qa import get_predefined_answer, normalize_question
+from app.predefined_qa import (
+    get_predefined_answer, 
+    normalize_question,
+    detect_question_category,
+    find_exact_match,
+    GENERAL_INFORMATION_QUESTIONS,
+    PARENTS_STUDENTS_QUESTIONS,
+    FRANCHISE_QUESTIONS,
+    PREDEFINED_QA
+)
 from app.utils.embeddings import load_or_build_faiss_index, get_embeddings
 from app.utils.location_detector import LocationDetector
 from app.utils.location_api import LocationAPIClient
@@ -412,9 +421,122 @@ class FAQRetriever:
         
         return formatted_text
     
-    def _generate_codeninjas_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
+    def _search_all_predefined_arrays(self, question: str) -> Tuple[Optional[str], bool]:
         """
-        Generate a prompt for CodeNinjas website queries using Grok LLM.
+        Search through all predefined Q&A arrays:
+        - PREDEFINED_QA
+        - GENERAL_INFORMATION_QUESTIONS
+        - PARENTS_STUDENTS_QUESTIONS
+        - FRANCHISE_QUESTIONS
+        
+        Args:
+            question: User's question string
+            
+        Returns:
+            Tuple[Optional[str], bool]: (Answer if match found, should_also_search_llm flag)
+        """
+        logger = logging.getLogger(__name__)
+        
+        # Combine all arrays to search
+        all_arrays = [
+            ("PREDEFINED_QA", PREDEFINED_QA),
+            ("GENERAL_INFORMATION_QUESTIONS", GENERAL_INFORMATION_QUESTIONS),
+            ("PARENTS_STUDENTS_QUESTIONS", PARENTS_STUDENTS_QUESTIONS),
+            ("FRANCHISE_QUESTIONS", FRANCHISE_QUESTIONS)
+        ]
+        
+        # Search through each array
+        for array_name, array_data in all_arrays:
+            if not array_data:
+                continue
+                
+            logger.info(f"Searching in {array_name}...")
+            
+            # Search for match and check for also_search_llm flag in one pass
+            answer, should_search_llm = self._find_match_with_llm_flag(question, array_data)
+            if answer:
+                logger.info(f"Found answer in {array_name}")
+                if should_search_llm:
+                    logger.info(f"Entry in {array_name} has also_search_llm flag set - will also search LLM")
+                return answer, should_search_llm
+        
+        return None, False
+    
+    def _find_match_with_llm_flag(self, question: str, array_data: List[Dict[str, Any]]) -> Tuple[Optional[str], bool]:
+        """
+        Find exact match in predefined Q&A array and check for also_search_llm flag.
+        Uses the same matching logic as find_exact_match.
+        
+        Args:
+            question: User's question string
+            array_data: The predefined Q&A array to search
+            
+        Returns:
+            Tuple[Optional[str], bool]: (Answer if match found, should_also_search_llm flag)
+        """
+        from app.predefined_qa import normalize_for_matching
+        
+        if not question or not array_data:
+            return None, False
+        
+        user_normalized = normalize_question(question)
+        user_keywords = set(normalize_for_matching(question).split())
+        
+        best_match = None
+        best_score = 0.0
+        best_also_search_llm = False
+        
+        for qa_pair in array_data:
+            predefined_q = qa_pair.get("question", "")
+            predefined_a = qa_pair.get("answer", "")
+            also_search_llm = qa_pair.get("also_search_llm", False)
+            
+            if not predefined_q or not predefined_a:
+                continue
+            
+            predefined_normalized = normalize_question(predefined_q)
+            predefined_keywords = set(normalize_for_matching(predefined_q).split())
+            
+            # Strategy 1: Exact normalized match
+            if user_normalized == predefined_normalized:
+                return predefined_a, bool(also_search_llm)
+            
+            # Strategy 2: Substring match (user question contains predefined or vice versa)
+            if (user_normalized in predefined_normalized or
+                    predefined_normalized in user_normalized):
+                # Calculate overlap score
+                if predefined_keywords:
+                    overlap = len(user_keywords.intersection(predefined_keywords))
+                    overlap_ratio = overlap / len(predefined_keywords)
+                    if overlap_ratio >= 0.8:  # 80% keyword overlap
+                        return predefined_a, bool(also_search_llm)
+            
+            # Strategy 3: High keyword overlap
+            if user_keywords and predefined_keywords:
+                common_keywords = user_keywords.intersection(predefined_keywords)
+                if common_keywords:
+                    # Calculate overlap ratio (both directions)
+                    overlap_ratio_user = len(common_keywords) / len(user_keywords) if user_keywords else 0
+                    overlap_ratio_predefined = len(common_keywords) / len(predefined_keywords) if predefined_keywords else 0
+                    
+                    # Use the average overlap
+                    avg_overlap = (overlap_ratio_user + overlap_ratio_predefined) / 2
+                    
+                    # Require at least 80% overlap and at least 3 common keywords
+                    if avg_overlap >= 0.8 and len(common_keywords) >= 3:
+                        if avg_overlap > best_score:
+                            best_match = predefined_a
+                            best_score = avg_overlap
+                            best_also_search_llm = bool(also_search_llm)
+        
+        if best_match:
+            return best_match, best_also_search_llm
+        
+        return None, False
+    
+    def _generate_franchise_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
+        """
+        Generate a franchise-specific prompt for CodeNinjas franchise queries using Grok LLM.
         
         Args:
             question: User's question string
@@ -423,7 +545,9 @@ class FAQRetriever:
         Returns:
             str: Formatted prompt for Grok LLM
         """
-        base_prompt = f"""You are a concise AI assistant for CodeNinjas. Answer the user's question in the SHORTEST way possible.
+        franchise_website = "https://connect.codeninjas.com/franchising/home"
+        
+        prompt = f"""You are a concise AI assistant for CodeNinjas Franchise Information. Answer the user's question about franchise opportunities, ownership, requirements, costs, or support in the SHORTEST way possible.
 
 CRITICAL RULES - STRICTLY FOLLOW:
 - Maximum 2-3 sentences OR 50 words - whichever is shorter
@@ -432,25 +556,120 @@ CRITICAL RULES - STRICTLY FOLLOW:
 - NO "Here's...", "Let me...", "I can...", "Sure!" - just answer directly
 - If you don't know, say "I don't have that information" (one sentence only)
 - Be direct and factual - cut straight to the answer
+- Focus on franchise-related information from the CodeNinjas franchise website
+
+Franchise Website: {franchise_website}
 
 User Question: {question}"""
 
         if location_slug:
-            # Add location context if available
-            base_prompt += f"\n\nLocation: {location_slug}"
+            prompt += f"\n\nLocation Context: {location_slug}"
         
-        base_prompt += """\n\nAnswer the question above in the shortest possible way. Maximum 50 words. No extra information."""
+        prompt += """\n\nAnswer the question above in the shortest possible way. Maximum 50 words. No extra information. Focus on franchise ownership, opportunities, requirements, costs, or support."""
         
-        return base_prompt
+        return prompt
+    
+    def _generate_parent_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
+        """
+        Generate a parent/student-specific prompt for CodeNinjas program queries using Grok LLM.
+        
+        Args:
+            question: User's question string
+            location_slug: Optional location slug for context
+            
+        Returns:
+            str: Formatted prompt for Grok LLM
+        """
+        prompt = f"""You are a concise AI assistant for CodeNinjas Programs and Enrollment. Answer the user's question about enrollment, locations, programs, events, schedules, or student information in the SHORTEST way possible.
+
+CRITICAL RULES - STRICTLY FOLLOW:
+- Maximum 2-3 sentences OR 50 words - whichever is shorter
+- Answer ONLY the specific question asked - nothing else
+- NO introductory phrases, NO explanations, NO additional context
+- NO "Here's...", "Let me...", "I can...", "Sure!" - just answer directly
+- If you don't know, say "I don't have that information" (one sentence only)
+- Be direct and factual - cut straight to the answer
+- Focus on program information, enrollment, locations, schedules, and student-related topics
+
+User Question: {question}"""
+
+        if location_slug:
+            prompt += f"\n\nLocation: {location_slug}"
+        
+        prompt += """\n\nAnswer the question above in the shortest possible way. Maximum 50 words. No extra information. Focus on programs, enrollment, locations, schedules, or student information."""
+        
+        return prompt
+    
+    def _generate_general_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
+        """
+        Generate a general information prompt for CodeNinjas queries using Grok LLM.
+        
+        Args:
+            question: User's question string
+            location_slug: Optional location slug for context
+            
+        Returns:
+            str: Formatted prompt for Grok LLM
+        """
+        prompt = f"""You are a concise AI assistant for CodeNinjas. Answer the user's question about general information, programs, curriculum, or services in the SHORTEST way possible.
+
+CRITICAL RULES - STRICTLY FOLLOW:
+- Maximum 2-3 sentences OR 50 words - whichever is shorter
+- Answer ONLY the specific question asked - nothing else
+- NO introductory phrases, NO explanations, NO additional context
+- NO "Here's...", "Let me...", "I can...", "Sure!" - just answer directly
+- If you don't know, say "I don't have that information" (one sentence only)
+- Be direct and factual - cut straight to the answer
+- Focus on general information about CodeNinjas, programs, curriculum, learning platform, and services
+
+User Question: {question}"""
+
+        if location_slug:
+            prompt += f"\n\nLocation: {location_slug}"
+        
+        prompt += """\n\nAnswer the question above in the shortest possible way. Maximum 50 words. No extra information."""
+        
+        return prompt
+    
+    def _generate_codeninjas_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
+        """
+        Generate a prompt for CodeNinjas website queries using Grok LLM.
+        Automatically detects the category and uses the appropriate prompt.
+        
+        Args:
+            question: User's question string
+            location_slug: Optional location slug for context
+            
+        Returns:
+            str: Formatted prompt for Grok LLM
+        """
+        # Detect the category of the question
+        category = detect_question_category(question)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Detected question category: {category} for question: {question[:100]}")
+        
+        # Generate category-specific prompt
+        if category == "franchise":
+            return self._generate_franchise_prompt(question, location_slug)
+        elif category == "parent":
+            return self._generate_parent_prompt(question, location_slug)
+        else:  # general
+            return self._generate_general_prompt(question, location_slug)
     
     async def get_answer(self, question: str, location_slug: Optional[str] = None) -> str:
         """
         Get answer to a user question using improved multi-tier approach:
         1. Check for "Go back to main menu" queries - return welcome message
-        2. Check predefined Q&A (exact/precise matching) - only return if it's a string answer (not menu/list)
+        2. Check all predefined Q&A arrays (exact/precise matching):
+           - PREDEFINED_QA
+           - GENERAL_INFORMATION_QUESTIONS
+           - PARENTS_STUDENTS_QUESTIONS
+           - FRANCHISE_QUESTIONS
         3. Check FAQ list with exact text matching first
         4. Check FAQ list with semantic search
         5. Use API-based data extraction for location-specific queries
+        6. Fallback to LLM (Grok) with category-specific prompts
         
         Args:
             question: User's question string
@@ -495,8 +714,8 @@ User Question: {question}"""
             # Return the welcome message
             return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['Parent/Guardian', 'Existing Franchise Owner','Franchise Staff', 'Potential Franchisee Owner', 'Something else/just browsing']"
         
-        # TIER 1: Check predefined Q&A first (exact/precise matching)
-        logger.info("Tier 1: Checking predefined Q&A...")
+        # TIER 1: Check all predefined Q&A arrays (exact/precise matching)
+        logger.info("Tier 1: Checking all predefined Q&A arrays (PREDEFINED_QA, GENERAL_INFORMATION_QUESTIONS, PARENTS_STUDENTS_QUESTIONS, FRANCHISE_QUESTIONS)...")
         
         # Special handling for "Something else/just browsing" - ask user what they're looking for
         # Use the same normalization as predefined_qa for consistent matching
@@ -510,18 +729,26 @@ User Question: {question}"""
             logger.info("User selected 'Something else/just browsing', prompting for more details")
             return "Please tell us what you are looking for"
         
-        predefined_answer = get_predefined_answer(question)
+        # Search through all predefined arrays
+        predefined_answer, should_also_search_llm = self._search_all_predefined_arrays(question)
         if predefined_answer:
-            logger.info("Found answer in predefined Q&A")
-            # Convert list to JSON string format if needed (for menu options)
-            if isinstance(predefined_answer, list):
-                import json
-                logger.info("Predefined Q&A returned menu options")
-                return json.dumps(predefined_answer)
-            # Return string answer directly with URL formatting
-            return self._format_urls_as_clickable(predefined_answer)
+            logger.info("Found answer in predefined Q&A arrays")
+            
+            # If also_search_llm flag is set, continue to LLM search but store the predefined answer as fallback
+            if should_also_search_llm:
+                logger.info("Predefined answer found but also_search_llm flag is set - proceeding to LLM search")
+                # Continue to other tiers (FAQ, API, LLM) - don't return here
+            else:
+                # Convert list to JSON string format if needed (for menu options)
+                if isinstance(predefined_answer, list):
+                    import json
+                    logger.info("Predefined Q&A returned menu options")
+                    return json.dumps(predefined_answer)
+                # Return string answer directly with URL formatting
+                return self._format_urls_as_clickable(predefined_answer)
         
-        logger.info("No match found in predefined Q&A, proceeding to FAQ search...")
+        if not predefined_answer:
+            logger.info("No match found in any predefined Q&A array, proceeding to FAQ search...")
         
         # TIER 2a: Check FAQ list with exact text matching first
         logger.info("Tier 2a: Checking FAQ list with exact text matching...")

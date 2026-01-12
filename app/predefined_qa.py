@@ -3,25 +3,100 @@ Predefined Q&A data storage and exact matching.
 Contains a list of predefined question-answer pairs for exact/precise matching.
 This is checked BEFORE semantic search in the FAQ list.
 """
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
 import re
+
+# Category-based question arrays for LLM prompt generation
+# Add your questions and answers here in the format: List[Dict[str, str]] with 'question' and 'answer' keys
+GENERAL_INFORMATION_QUESTIONS: List[Dict[str, str]] = [
+    {
+        "question": "General Information",
+        "answer": ['About Code Ninjas', 'Global Presence',
+                                        'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "About Code Ninjas",
+        "answer": ['Mission & Vision', 'STEM Education Focus',
+                                       'Go back to Main Menu'],
+        "also_search_llm": True
+    }
+]
+
+PARENTS_STUDENTS_QUESTIONS: List[Dict[str, str]] = [
+    {
+        "question": "Parents & Students",
+        "answer": ['Location & Enrollment', 'Programs', 'Learning Platform', 'Community & Events',
+                                                                             'Go back to Main Menu']
+    },
+    {
+        "question": "Location & Enrollment",
+        "answer": ['Location', 'Enrollment Details',
+                   'Go back to Main Menu']
+    },
+    {
+        "question": "Community & Events",
+        "answer": ['Parent’s Night Out', 'Local Community Impact',
+                   'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "Location",
+        "answer": ['Address ', 'Hours of Operation',
+                               'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "Programs",
+        "answer": ['Core Programs', 'Special Programs',
+                                    'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "Core Programs",
+        "answer": ['CREATE', 'JR',
+                             'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "Special Programs",
+        "answer": ['Camps', 'Academies', 'Prodigy Program',
+                   'Go back to Main Menu'],
+        "also_search_llm": True
+    }
+]
+
+FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
+{
+        "question": "Franchise Opportunities",
+        "answer": ['New Owner', 'Existing Owner',
+                   'Go back to Main Menu']
+    },
+    {
+        "question": "New Owner",
+        "answer": ['Franchise Overview', 'Opportunities', 'Requirements', 'Support & Training',
+                   'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "Existing Owner",
+        "answer": ['Operational Support', "Owner Portal",
+                   'Go back to Main Menu'],
+        "also_search_llm": True
+    },
+    {
+        "question": "Learning Platform",
+        "answer": ['IMPACT Platform',
+                   'Go back to Main Menu']
+    }
+]
 
 # Predefined Q&A data structure: List of dictionaries with 'question' and 'answer' keys
 # Static predefined questions - do not edit
 PREDEFINED_QA: List[Dict[str, str]] = [
     {
         "question": "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?",
-        "answer": ['Parent/Guardian', 'Existing Franchise Owner', 'Franchise Staff', 'Potential Franchisee Owner ',
-                   'Something else/just browsing']
-    },
-    {
-        "question": "Parent/Guardian",
-        "answer": ['Enroll or learn about programs', 'Camps', 'Clubs',
-                   'Academies', 'Create', 'JR', 'Know more about Parent Night Out',
-                   # 'Know more about Birthday Parties', 'Know more about Home Schooling', 'Know more about After School Programs',
-                   # 'Know more about PTO / PTA', 'Know more about Upcoming Events / Programs',
-                   # 'Ask a general question about a program',
-                    'Go back to Main Menu']
+        "answer": ['General Information', 'Parents & Students', 'Franchise Opportunities']
     },
     {
         "question": "Existing Franchise Owner",
@@ -201,3 +276,68 @@ def get_predefined_answer(user_question: str) -> Optional[str]:
         Optional[str]: Answer if match found, None otherwise
     """
     return find_exact_match(user_question, PREDEFINED_QA)
+
+
+def detect_question_category(question: str) -> Literal["franchise", "parent", "general"]:
+    """
+    Detect which category a question belongs to based on keywords and context.
+    
+    Categories:
+    - franchise: Questions about franchise ownership, opportunities, requirements, etc.
+    - parent: Questions about enrollment, locations, programs, events, student progress, etc.
+    - general: General information about Code Ninjas, programs, curriculum, etc.
+    
+    Args:
+        question: User's question string
+        
+    Returns:
+        Literal["franchise", "parent", "general"]: Detected category
+    """
+    if not question:
+        return "general"
+    
+    question_lower = normalize_question(question)
+    question_words = set(question_lower.split())
+    
+    # Franchise keywords (highest priority - check first)
+    franchise_keywords = {
+        'franchise', 'franchisee', 'franchisor', 'franchise owner', 'franchise ownership',
+        'franchise opportunity', 'franchise opportunities', 'own a franchise', 'become a franchise',
+        'franchise cost', 'franchise costs', 'franchise investment', 'franchise fee', 'franchise fees',
+        'franchise requirement', 'franchise requirements', 'franchise application', 'franchise process',
+        'franchise support', 'franchise training', 'franchise disclosure', 'fdd', 'franchise document',
+        'franchise territory', 'franchise location', 'franchise locations', 'franchise transfer',
+        'sell franchise', 'franchise sale', 'franchise business partner', 'fbp', 'franchise portal',
+        'owner portal', 'franchise operations', 'franchise operational', 'franchise royalty', 'franchise royalties',
+        'franchise marketing', 'franchise system', 'franchise systems', 'franchise software',
+        'master franchise', 'area development', 'international franchise', 'existing owner',
+        'potential franchise', 'new franchise', 'franchise staff'
+    }
+    
+    # Parent/Student keywords
+    parent_keywords = {
+        'enroll', 'enrollment', 'sign up', 'register', 'registration', 'signup',
+        'location', 'locations', 'address', 'hours', 'hours of operation', 'open',
+        'contact', 'phone', 'email', 'phone number', 'contact information',
+        "parent's night out", 'parents night out', 'community event', 'community events',
+        'upcoming event', 'upcoming events', 'local community', 'community impact',
+        'program schedule', 'program schedules', 'program timing', 'program timings',
+        'when are programs', 'when are classes', 'class schedule', 'class schedules',
+        'cost', 'price', 'pricing', 'fee', 'fees', 'how much', 'what does it cost',
+        'student progress', 'child progress', 'track progress', 'parent portal',
+        'what does my child', 'what should my child', 'first day', 'what to bring',
+        'nearest location', 'location near me', 'find location', 'find a location'
+    }
+    
+    # Check for franchise keywords
+    franchise_matches = sum(1 for keyword in franchise_keywords if keyword in question_lower)
+    if franchise_matches > 0:
+        return "franchise"
+    
+    # Check for parent/student keywords
+    parent_matches = sum(1 for keyword in parent_keywords if keyword in question_lower)
+    if parent_matches > 0:
+        return "parent"
+    
+    # Default to general
+    return "general"
