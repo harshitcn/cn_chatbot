@@ -706,13 +706,13 @@ User Question: {question}"""
             # For short questions, also check for single words
             if normalized_question in ["home", "menu", "back"]:
                 logger.info("User requested to go back to main menu (short query), returning welcome message")
-                return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['Parent/Guardian', 'Existing Franchise Owner','Franchise Staff', 'Potential Franchisee Owner', 'Something else/just browsing']"
+                return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['General Information', 'Parents & Students', 'Franchise']"
         
         # Check for menu-related phrases in longer questions
         if any(phrase in normalized_question for phrase in menu_phrases):
             logger.info("User requested to go back to main menu, returning welcome message")
             # Return the welcome message
-            return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['Parent/Guardian', 'Existing Franchise Owner','Franchise Staff', 'Potential Franchisee Owner', 'Something else/just browsing']"
+            return "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?,['General Information', 'Parents & Students', 'Franchise']"
         
         # TIER 1: Check all predefined Q&A arrays (exact/precise matching)
         logger.info("Tier 1: Checking all predefined Q&A arrays (PREDEFINED_QA, GENERAL_INFORMATION_QUESTIONS, PARENTS_STUDENTS_QUESTIONS, FRANCHISE_QUESTIONS)...")

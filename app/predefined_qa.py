@@ -68,7 +68,7 @@ PARENTS_STUDENTS_QUESTIONS: List[Dict[str, str]] = [
 
 FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
 {
-        "question": "Franchise Opportunities",
+        "question": "Franchise",
         "answer": ['New Owner', 'Existing Owner',
                    'Go back to Main Menu']
     },
@@ -96,7 +96,7 @@ FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
 PREDEFINED_QA: List[Dict[str, str]] = [
     {
         "question": "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?",
-        "answer": ['General Information', 'Parents & Students', 'Franchise Opportunities']
+        "answer": ['General Information', 'Parents & Students', 'Franchise']
     },
     {
         "question": "Existing Franchise Owner",
