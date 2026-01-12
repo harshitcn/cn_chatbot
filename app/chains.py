@@ -537,17 +537,16 @@ class FAQRetriever:
         # Normalize the question for comparison
         normalized_question = normalize_question(question)
         
-        # Check if question matches any in the LLM array
+        # Check if question matches any in the LLM array (exact match only, no substring matching)
         for llm_q in llm_questions:
             if not llm_q:
                 continue
             
             llm_q_normalized = normalize_question(llm_q)
             
-            # Check for exact match or if question contains the LLM question (or vice versa)
-            if (normalized_question == llm_q_normalized or 
-                normalized_question in llm_q_normalized or 
-                llm_q_normalized in normalized_question):
+            # Only exact match - no substring matching to avoid false positives
+            # e.g., "Franchise" should NOT match "Franchise Overview"
+            if normalized_question == llm_q_normalized:
                 logger.info(f"Question found in {array_name} - will also search LLM")
                 return True
         
@@ -756,12 +755,14 @@ User Question: {question}"""
         predefined_answer = self._search_all_predefined_arrays(question)
         
         # Check if this question should go directly to LLM search (skip FAQ and API tiers)
+        # This check happens even if predefined answer exists, so questions in LLM arrays will go to LLM
         should_go_to_llm = self._should_also_search_llm(question)
         if should_go_to_llm:
             logger.info("Question found in LLM search array - skipping FAQ and API tiers, going directly to LLM search")
             # Skip to LLM tier directly
             return await self._query_llm_tier(question, location_slug)
         
+        # If predefined answer found and not in LLM array, return it immediately
         if predefined_answer:
             logger.info("Found answer in predefined Q&A arrays")
             # Convert list to JSON string format if needed (for menu options)
