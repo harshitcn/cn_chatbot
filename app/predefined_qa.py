@@ -86,7 +86,7 @@ FRANCHISE_LLM_QUESTIONS: List[str] = [
 
 FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
     {
-        "question": "Franchise",
+        "question": "Franchise Business",
         "answer": ['New Owner', 'Existing Owner',
                    'Go back to Main Menu']
     },
@@ -112,7 +112,7 @@ FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
 PREDEFINED_QA: List[Dict[str, str]] = [
     {
         "question": "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?",
-        "answer": ['General Information', 'Parents & Students', 'Franchise']
+        "answer": ['General Information', 'Parents & Students', 'Franchise Business']
     },
     {
         "question": "'About Code Ninjas', 'Global Presence'",
