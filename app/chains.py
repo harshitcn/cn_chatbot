@@ -18,6 +18,9 @@ from app.predefined_qa import (
     GENERAL_INFORMATION_QUESTIONS,
     PARENTS_STUDENTS_QUESTIONS,
     FRANCHISE_QUESTIONS,
+    GENERAL_INFORMATION_LLM_QUESTIONS,
+    PARENTS_STUDENTS_LLM_QUESTIONS,
+    FRANCHISE_LLM_QUESTIONS,
     PREDEFINED_QA
 )
 from app.utils.embeddings import load_or_build_faiss_index, get_embeddings
@@ -421,7 +424,7 @@ class FAQRetriever:
         
         return formatted_text
     
-    def _search_all_predefined_arrays(self, question: str) -> Tuple[Optional[str], bool]:
+    def _search_all_predefined_arrays(self, question: str) -> Optional[str]:
         """
         Search through all predefined Q&A arrays:
         - PREDEFINED_QA
@@ -433,7 +436,7 @@ class FAQRetriever:
             question: User's question string
             
         Returns:
-            Tuple[Optional[str], bool]: (Answer if match found, should_also_search_llm flag)
+            Optional[str]: Answer if match found in any array, None otherwise
         """
         logger = logging.getLogger(__name__)
         
@@ -451,88 +454,104 @@ class FAQRetriever:
                 continue
                 
             logger.info(f"Searching in {array_name}...")
-            
-            # Search for match and check for also_search_llm flag in one pass
-            answer, should_search_llm = self._find_match_with_llm_flag(question, array_data)
+            answer = find_exact_match(question, array_data)
             if answer:
                 logger.info(f"Found answer in {array_name}")
-                if should_search_llm:
-                    logger.info(f"Entry in {array_name} has also_search_llm flag set - will also search LLM")
-                return answer, should_search_llm
+                return answer
         
-        return None, False
+        return None
     
-    def _find_match_with_llm_flag(self, question: str, array_data: List[Dict[str, Any]]) -> Tuple[Optional[str], bool]:
+    async def _query_llm_tier(self, question: str, location_slug: Optional[str] = None) -> str:
         """
-        Find exact match in predefined Q&A array and check for also_search_llm flag.
-        Uses the same matching logic as find_exact_match.
+        Query the LLM tier directly (skipping FAQ and API tiers).
         
         Args:
             question: User's question string
-            array_data: The predefined Q&A array to search
+            location_slug: Optional location slug for context
             
         Returns:
-            Tuple[Optional[str], bool]: (Answer if match found, should_also_search_llm flag)
+            str: LLM response or default response if LLM fails
         """
-        from app.predefined_qa import normalize_for_matching
+        logger = logging.getLogger(__name__)
+        DEFAULT_RESPONSE = "I'm sorry, I don't have information about that. Please try asking about our services, programs, or locations, or contact our support team for assistance."
         
-        if not question or not array_data:
-            return None, False
+        logger.info("Querying LLM tier directly...")
+        # Check if LLM client is configured
+        if not self.llm_client.api_key or not self.llm_client.api_url:
+            logger.warning(f"LLM client not configured - api_key: {'present' if self.llm_client.api_key else 'missing'}, api_url: {'present' if self.llm_client.api_url else 'missing'}")
+            return self._format_urls_as_clickable(DEFAULT_RESPONSE)
         
-        user_normalized = normalize_question(question)
-        user_keywords = set(normalize_for_matching(question).split())
-        
-        best_match = None
-        best_score = 0.0
-        best_also_search_llm = False
-        
-        for qa_pair in array_data:
-            predefined_q = qa_pair.get("question", "")
-            predefined_a = qa_pair.get("answer", "")
-            also_search_llm = qa_pair.get("also_search_llm", False)
+        logger.info(f"LLM client configured - provider: {self.llm_client.provider}, api_url: {self.llm_client.api_url[:50]}...")
+        try:
+            # Generate prompt for CodeNinjas website query
+            prompt = self._generate_codeninjas_prompt(question, location_slug)
+            logger.info(f"Querying Grok LLM with user question: {question[:100]}...")
             
-            if not predefined_q or not predefined_a:
+            # Query Grok LLM
+            llm_response = await self.llm_client.query_llm(prompt)
+            
+            if llm_response and llm_response.strip():
+                # Truncate response to ensure it's concise (max 50 words)
+                truncated_response = self._truncate_response(llm_response.strip(), max_words=50)
+                # Format URLs as clickable links
+                formatted_response = self._format_urls_as_clickable(truncated_response)
+                logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} chars -> {len(formatted_response)} chars after formatting)")
+                return formatted_response
+            else:
+                logger.warning("Grok LLM returned empty response")
+                return self._format_urls_as_clickable(DEFAULT_RESPONSE)
+        except Exception as e:
+            logger.error(f"Error querying Grok LLM: {str(e)}", exc_info=True)
+            return self._format_urls_as_clickable(DEFAULT_RESPONSE)
+    
+    def _should_also_search_llm(self, question: str) -> bool:
+        """
+        Check if the question should also be searched via LLM by checking
+        the category-specific LLM question arrays.
+        
+        Args:
+            question: User's question string
+            
+        Returns:
+            bool: True if question should also go through LLM search
+        """
+        logger = logging.getLogger(__name__)
+        
+        # Detect category to check the appropriate LLM array
+        category = detect_question_category(question)
+        
+        # Get the appropriate LLM questions array based on category
+        if category == "franchise":
+            llm_questions = FRANCHISE_LLM_QUESTIONS
+            array_name = "FRANCHISE_LLM_QUESTIONS"
+        elif category == "parent":
+            llm_questions = PARENTS_STUDENTS_LLM_QUESTIONS
+            array_name = "PARENTS_STUDENTS_LLM_QUESTIONS"
+        else:  # general
+            llm_questions = GENERAL_INFORMATION_LLM_QUESTIONS
+            array_name = "GENERAL_INFORMATION_LLM_QUESTIONS"
+        
+        if not llm_questions:
+            return False
+        
+        # Normalize the question for comparison
+        normalized_question = normalize_question(question)
+        
+        # Check if question matches any in the LLM array
+        for llm_q in llm_questions:
+            if not llm_q:
                 continue
             
-            predefined_normalized = normalize_question(predefined_q)
-            predefined_keywords = set(normalize_for_matching(predefined_q).split())
+            llm_q_normalized = normalize_question(llm_q)
             
-            # Strategy 1: Exact normalized match
-            if user_normalized == predefined_normalized:
-                return predefined_a, bool(also_search_llm)
-            
-            # Strategy 2: Substring match (user question contains predefined or vice versa)
-            if (user_normalized in predefined_normalized or
-                    predefined_normalized in user_normalized):
-                # Calculate overlap score
-                if predefined_keywords:
-                    overlap = len(user_keywords.intersection(predefined_keywords))
-                    overlap_ratio = overlap / len(predefined_keywords)
-                    if overlap_ratio >= 0.8:  # 80% keyword overlap
-                        return predefined_a, bool(also_search_llm)
-            
-            # Strategy 3: High keyword overlap
-            if user_keywords and predefined_keywords:
-                common_keywords = user_keywords.intersection(predefined_keywords)
-                if common_keywords:
-                    # Calculate overlap ratio (both directions)
-                    overlap_ratio_user = len(common_keywords) / len(user_keywords) if user_keywords else 0
-                    overlap_ratio_predefined = len(common_keywords) / len(predefined_keywords) if predefined_keywords else 0
-                    
-                    # Use the average overlap
-                    avg_overlap = (overlap_ratio_user + overlap_ratio_predefined) / 2
-                    
-                    # Require at least 80% overlap and at least 3 common keywords
-                    if avg_overlap >= 0.8 and len(common_keywords) >= 3:
-                        if avg_overlap > best_score:
-                            best_match = predefined_a
-                            best_score = avg_overlap
-                            best_also_search_llm = bool(also_search_llm)
+            # Check for exact match or if question contains the LLM question (or vice versa)
+            if (normalized_question == llm_q_normalized or 
+                normalized_question in llm_q_normalized or 
+                llm_q_normalized in normalized_question):
+                logger.info(f"Question found in {array_name} - will also search LLM")
+                return True
         
-        if best_match:
-            return best_match, best_also_search_llm
-        
-        return None, False
+        return False
     
     def _generate_franchise_prompt(self, question: str, location_slug: Optional[str] = None) -> str:
         """
@@ -557,6 +576,7 @@ CRITICAL RULES - STRICTLY FOLLOW:
 - If you don't know, say "I don't have that information" (one sentence only)
 - Be direct and factual - cut straight to the answer
 - Focus on franchise-related information from the CodeNinjas franchise website
+- Do not include location name or slug in the result 
 
 Franchise Website: {franchise_website}
 
@@ -590,6 +610,8 @@ CRITICAL RULES - STRICTLY FOLLOW:
 - If you don't know, say "I don't have that information" (one sentence only)
 - Be direct and factual - cut straight to the answer
 - Focus on program information, enrollment, locations, schedules, and student-related topics
+- Do not include location name or slug in the result 
+
 
 User Question: {question}"""
 
@@ -621,6 +643,7 @@ CRITICAL RULES - STRICTLY FOLLOW:
 - If you don't know, say "I don't have that information" (one sentence only)
 - Be direct and factual - cut straight to the answer
 - Focus on general information about CodeNinjas, programs, curriculum, learning platform, and services
+- Do not include location name or slug in the result 
 
 User Question: {question}"""
 
@@ -730,25 +753,26 @@ User Question: {question}"""
             return "Please tell us what you are looking for"
         
         # Search through all predefined arrays
-        predefined_answer, should_also_search_llm = self._search_all_predefined_arrays(question)
+        predefined_answer = self._search_all_predefined_arrays(question)
+        
+        # Check if this question should go directly to LLM search (skip FAQ and API tiers)
+        should_go_to_llm = self._should_also_search_llm(question)
+        if should_go_to_llm:
+            logger.info("Question found in LLM search array - skipping FAQ and API tiers, going directly to LLM search")
+            # Skip to LLM tier directly
+            return await self._query_llm_tier(question, location_slug)
+        
         if predefined_answer:
             logger.info("Found answer in predefined Q&A arrays")
-            
-            # If also_search_llm flag is set, continue to LLM search but store the predefined answer as fallback
-            if should_also_search_llm:
-                logger.info("Predefined answer found but also_search_llm flag is set - proceeding to LLM search")
-                # Continue to other tiers (FAQ, API, LLM) - don't return here
-            else:
-                # Convert list to JSON string format if needed (for menu options)
-                if isinstance(predefined_answer, list):
-                    import json
-                    logger.info("Predefined Q&A returned menu options")
-                    return json.dumps(predefined_answer)
-                # Return string answer directly with URL formatting
-                return self._format_urls_as_clickable(predefined_answer)
+            # Convert list to JSON string format if needed (for menu options)
+            if isinstance(predefined_answer, list):
+                import json
+                logger.info("Predefined Q&A returned menu options")
+                return json.dumps(predefined_answer)
+            # Return string answer directly with URL formatting
+            return self._format_urls_as_clickable(predefined_answer)
         
-        if not predefined_answer:
-            logger.info("No match found in any predefined Q&A array, proceeding to FAQ search...")
+        logger.info("No match found in any predefined Q&A array, proceeding to FAQ search...")
         
         # TIER 2a: Check FAQ list with exact text matching first
         logger.info("Tier 2a: Checking FAQ list with exact text matching...")
@@ -995,30 +1019,7 @@ User Question: {question}"""
         # TIER 4: Fallback to Grok LLM when API fails
         if api_failed:
             logger.info("Tier 4: API failed or no location provided, attempting Grok LLM fallback...")
-            # Check if LLM client is configured
-            if not self.llm_client.api_key or not self.llm_client.api_url:
-                logger.warning(f"Tier 4: LLM client not configured - api_key: {'present' if self.llm_client.api_key else 'missing'}, api_url: {'present' if self.llm_client.api_url else 'missing'}")
-            else:
-                logger.info(f"Tier 4: LLM client configured - provider: {self.llm_client.provider}, api_url: {self.llm_client.api_url[:50]}...")
-                try:
-                    # Generate prompt for CodeNinjas website query
-                    prompt = self._generate_codeninjas_prompt(question, location_slug)
-                    logger.info(f"Querying Grok LLM with user question: {question[:100]}...")
-                    
-                    # Query Grok LLM
-                    llm_response = await self.llm_client.query_llm(prompt)
-                    
-                    if llm_response and llm_response.strip():
-                        # Truncate response to ensure it's concise (max 50 words)
-                        truncated_response = self._truncate_response(llm_response.strip(), max_words=50)
-                        # Format URLs as clickable links
-                        formatted_response = self._format_urls_as_clickable(truncated_response)
-                        logger.info(f"Successfully got answer from Grok LLM ({len(llm_response)} chars -> {len(formatted_response)} chars after formatting)")
-                        return formatted_response
-                    else:
-                        logger.warning("Grok LLM returned empty response")
-                except Exception as e:
-                    logger.error(f"Error querying Grok LLM: {str(e)}", exc_info=True)
+            return await self._query_llm_tier(question, location_slug)
         
         # If all tiers fail, return default response
         logger.info("All tiers exhausted, returning default response")

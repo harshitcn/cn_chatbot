@@ -12,14 +12,12 @@ GENERAL_INFORMATION_QUESTIONS: List[Dict[str, str]] = [
     {
         "question": "General Information",
         "answer": ['About Code Ninjas', 'Global Presence',
-                                        'Go back to Main Menu'],
-        "also_search_llm": True
+                   'Go back to Main Menu'],
     },
     {
         "question": "About Code Ninjas",
         "answer": ['Mission & Vision', 'STEM Education Focus',
-                                       'Go back to Main Menu'],
-        "also_search_llm": True
+                   'Go back to Main Menu'],
     }
 ]
 
@@ -27,7 +25,7 @@ PARENTS_STUDENTS_QUESTIONS: List[Dict[str, str]] = [
     {
         "question": "Parents & Students",
         "answer": ['Location & Enrollment', 'Programs', 'Learning Platform', 'Community & Events',
-                                                                             'Go back to Main Menu']
+                   'Go back to Main Menu']
     },
     {
         "question": "Location & Enrollment",
@@ -38,36 +36,56 @@ PARENTS_STUDENTS_QUESTIONS: List[Dict[str, str]] = [
         "question": "Community & Events",
         "answer": ['Parent’s Night Out', 'Local Community Impact',
                    'Go back to Main Menu'],
-        "also_search_llm": True
     },
     {
         "question": "Location",
         "answer": ['Address ', 'Hours of Operation',
-                               'Go back to Main Menu'],
-        "also_search_llm": True
+                   'Go back to Main Menu'],
     },
     {
         "question": "Programs",
-        "answer": ['Core Programs', 'Special Programs',
-                                    'Go back to Main Menu'],
-        "also_search_llm": True
+        "answer": ['Core', 'Special',
+                   'Go back to Main Menu'],
     },
     {
-        "question": "Core Programs",
+        "question": "Core",
         "answer": ['CREATE', 'JR',
-                             'Go back to Main Menu'],
-        "also_search_llm": True
+                   'Go back to Main Menu'],
     },
     {
-        "question": "Special Programs",
+        "question": "Special",
         "answer": ['Camps', 'Academies', 'Prodigy Program',
                    'Go back to Main Menu'],
-        "also_search_llm": True
     }
 ]
 
+# Separate arrays for questions that should also go through LLM search
+# Add question strings (not dicts) that should also be searched via LLM even if found in predefined arrays
+GENERAL_INFORMATION_LLM_QUESTIONS: List[str] = [
+    'Mission & Vision',
+    'STEM Education Focus',
+    'Global Presence'
+]
+
+PARENTS_STUDENTS_LLM_QUESTIONS: List[str] = [
+    'Enrollment Details',
+    'Address ',
+    'Hours of Operation',
+    'Parent’s Night Out',
+    'Local Community Impact',
+    'CREATE', 'JR',
+    'Camps', 'Academies', 'Prodigy Program',
+
+]
+
+FRANCHISE_LLM_QUESTIONS: List[str] = [
+    'Franchise Overview', 'Opportunities', 'Requirements', 'Support & Training',
+    'Operational Support', "Owner Portal",
+    'IMPACT Platform'
+]
+
 FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
-{
+    {
         "question": "Franchise",
         "answer": ['New Owner', 'Existing Owner',
                    'Go back to Main Menu']
@@ -76,13 +94,11 @@ FRANCHISE_QUESTIONS: List[Dict[str, str]] = [
         "question": "New Owner",
         "answer": ['Franchise Overview', 'Opportunities', 'Requirements', 'Support & Training',
                    'Go back to Main Menu'],
-        "also_search_llm": True
     },
     {
         "question": "Existing Owner",
         "answer": ['Operational Support', "Owner Portal",
                    'Go back to Main Menu'],
-        "also_search_llm": True
     },
     {
         "question": "Learning Platform",
@@ -97,6 +113,11 @@ PREDEFINED_QA: List[Dict[str, str]] = [
     {
         "question": "Welcome to Code Ninjas! Are you interested in a Program or a Franchisee? Which role fits you the best?",
         "answer": ['General Information', 'Parents & Students', 'Franchise']
+    },
+    {
+        "question": "'About Code Ninjas', 'Global Presence'",
+        "answer": ['Core Programs', 'Special Programs',
+                   'Go back to Main Menu'],
     },
     {
         "question": "Existing Franchise Owner",
@@ -281,6 +302,7 @@ def get_predefined_answer(user_question: str) -> Optional[str]:
 def detect_question_category(question: str) -> Literal["franchise", "parent", "general"]:
     """
     Detect which category a question belongs to based on keywords and context.
+    First checks predefined arrays to determine category, then falls back to keyword matching.
     
     Categories:
     - franchise: Questions about franchise ownership, opportunities, requirements, etc.
@@ -295,16 +317,81 @@ def detect_question_category(question: str) -> Literal["franchise", "parent", "g
     """
     if not question:
         return "general"
-    
+
     question_lower = normalize_question(question)
     question_words = set(question_lower.split())
+
+    # First, check which predefined array contains this question (if any)
+    # This provides better context than keyword matching alone
+    # Check if question appears as an answer option in any array
     
+    # Check FRANCHISE_QUESTIONS - look for question in both question field and answer lists
+    for faq in FRANCHISE_QUESTIONS:
+        if isinstance(faq, dict):
+            faq_q = faq.get("question", "")
+            faq_a = faq.get("answer", "")
+            # Check if question field matches
+            if faq_q and normalize_question(faq_q) == question_lower:
+                return "franchise"
+            # Check if answer is a list and contains the question
+            if isinstance(faq_a, list):
+                for item in faq_a:
+                    if normalize_question(str(item)) == question_lower:
+                        return "franchise"
+    
+    # Check PARENTS_STUDENTS_QUESTIONS
+    for faq in PARENTS_STUDENTS_QUESTIONS:
+        if isinstance(faq, dict):
+            faq_q = faq.get("question", "")
+            faq_a = faq.get("answer", "")
+            if faq_q and normalize_question(faq_q) == question_lower:
+                return "parent"
+            if isinstance(faq_a, list):
+                for item in faq_a:
+                    if normalize_question(str(item)) == question_lower:
+                        return "parent"
+    
+    # Check GENERAL_INFORMATION_QUESTIONS
+    for faq in GENERAL_INFORMATION_QUESTIONS:
+        if isinstance(faq, dict):
+            faq_q = faq.get("question", "")
+            faq_a = faq.get("answer", "")
+            if faq_q and normalize_question(faq_q) == question_lower:
+                return "general"
+            if isinstance(faq_a, list):
+                for item in faq_a:
+                    if normalize_question(str(item)) == question_lower:
+                        return "general"
+    
+    # Check PREDEFINED_QA
+    for faq in PREDEFINED_QA:
+        if isinstance(faq, dict):
+            faq_q = faq.get("question", "")
+            faq_a = faq.get("answer", "")
+            if faq_q and normalize_question(faq_q) == question_lower:
+                # If found in PREDEFINED_QA, check which category array it might belong to
+                # by checking if it appears in any category-specific array
+                for franchise_faq in FRANCHISE_QUESTIONS:
+                    if isinstance(franchise_faq, dict):
+                        franchise_a = franchise_faq.get("answer", "")
+                        if isinstance(franchise_a, list) and any(normalize_question(str(item)) == question_lower for item in franchise_a):
+                            return "franchise"
+                for parent_faq in PARENTS_STUDENTS_QUESTIONS:
+                    if isinstance(parent_faq, dict):
+                        parent_a = parent_faq.get("answer", "")
+                        if isinstance(parent_a, list) and any(normalize_question(str(item)) == question_lower for item in parent_a):
+                            return "parent"
+                # Default to general if found in PREDEFINED_QA but not in category arrays
+                return "general"
+
+    # Fall back to keyword matching if not found in predefined arrays
     # Franchise keywords (highest priority - check first)
     franchise_keywords = {
         'franchise', 'franchisee', 'franchisor', 'franchise owner', 'franchise ownership',
         'franchise opportunity', 'franchise opportunities', 'own a franchise', 'become a franchise',
         'franchise cost', 'franchise costs', 'franchise investment', 'franchise fee', 'franchise fees',
-        'franchise requirement', 'franchise requirements', 'franchise application', 'franchise process',
+        'franchise requirement', 'franchise requirements', 'requirement', 'requirements',  # Added standalone requirements
+        'franchise application', 'franchise process',
         'franchise support', 'franchise training', 'franchise disclosure', 'fdd', 'franchise document',
         'franchise territory', 'franchise location', 'franchise locations', 'franchise transfer',
         'sell franchise', 'franchise sale', 'franchise business partner', 'fbp', 'franchise portal',
@@ -313,7 +400,7 @@ def detect_question_category(question: str) -> Literal["franchise", "parent", "g
         'master franchise', 'area development', 'international franchise', 'existing owner',
         'potential franchise', 'new franchise', 'franchise staff'
     }
-    
+
     # Parent/Student keywords
     parent_keywords = {
         'enroll', 'enrollment', 'sign up', 'register', 'registration', 'signup',
@@ -328,16 +415,16 @@ def detect_question_category(question: str) -> Literal["franchise", "parent", "g
         'what does my child', 'what should my child', 'first day', 'what to bring',
         'nearest location', 'location near me', 'find location', 'find a location'
     }
-    
+
     # Check for franchise keywords
     franchise_matches = sum(1 for keyword in franchise_keywords if keyword in question_lower)
     if franchise_matches > 0:
         return "franchise"
-    
+
     # Check for parent/student keywords
     parent_matches = sum(1 for keyword in parent_keywords if keyword in question_lower)
     if parent_matches > 0:
         return "parent"
-    
+
     # Default to general
     return "general"
