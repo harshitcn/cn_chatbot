@@ -4,7 +4,8 @@ Supports multiple environments: stage and production.
 """
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,7 +68,15 @@ class Settings(BaseSettings):
     email_use_tls: bool = True  # Use TLS for SMTP
     email_send_to_owners: bool = False  # If False, send to test email instead of center owners
     email_test_recipient: str = ""  # Test email address (used when email_send_to_owners=False)
-    test_mode_limit_centers: int = "" # Limit number of centers to process in stage environment (0 = no limit)
+    test_mode_limit_centers: int = 0 # Limit number of centers to process in stage environment (0 = no limit)
+    
+    @field_validator('test_mode_limit_centers', mode='before')
+    @classmethod
+    def parse_test_mode_limit_centers(cls, v):
+        """Convert empty string to 0 for test_mode_limit_centers."""
+        if v == '' or v is None:
+            return 0
+        return int(v) if isinstance(v, str) else v
     sync_to_database: bool = False  # If True, sync centers to database and use database. If False, fetch directly from APIs
     
     # Cron job settings

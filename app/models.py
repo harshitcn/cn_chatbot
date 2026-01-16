@@ -112,3 +112,9 @@ class BatchEventResponse(BaseModel):
     message: str = Field(..., description="Status message")
     started_at: datetime = Field(..., description="When the batch run started")
 
+
+# Text-to-Speech Models
+
+class TTSRequest(BaseModel):
+    """Request model for Text-to-Speech endpoint."""
+    text: str = Field(..., description="Text to convert to speech", min_length=1)

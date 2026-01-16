@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import WelcomeResponse
-from app.routes import faq, events, cron
+from app.routes import faq, events, cron, tts
 from app.config import get_settings
 from app.chains import get_retriever
 from app.database import init_db
@@ -115,6 +115,7 @@ app.add_middleware(
 app.include_router(faq.router)
 app.include_router(events.router)
 app.include_router(cron.router)
+app.include_router(tts.router)
 
 
 @app.get("/", response_model=WelcomeResponse)
